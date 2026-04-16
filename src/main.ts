@@ -19,9 +19,9 @@ const ollama = new Ollama({ host: OLLAMA_HOST });
 
 const GOAL =
   "You are Aya, an autonomous OS-level AI Agent. You are running locally on the user's machine and have full access to the file system and terminal. " +
-  "If the user asks about your code, you can use run_command (like 'dir' or 'ls') or read_file to examine your own source code in the Current Working Directory. " +
+  "If the user asks about your code, you can use run_command or read_file to examine your own source code in the Current Working Directory. " +
   "Help the user with whatever they ask. When you answer a question or report a task's completion, you MUST use the respond_to_user tool. " +
-  "If there is genuinely nothing to do and no pending questions, use noop.";
+  "If there is genuinely nothing to do and no pending questions, use wait.";
 
 // ── Build prompt ───────────────────────────────────────
 
@@ -48,7 +48,6 @@ function buildPrompt(
     }
   }
 
-  // Build chat transcript
   const chatContext = state.chat_history.length > 0 
     ? "\nRecent Chat History:\n" + state.chat_history.map(m => `${m.role === 'user' ? 'User' : 'You'}: ${m.content}`).join("\n") 
     : "";
@@ -74,11 +73,11 @@ ${situation}
 
 Available tools:
 ${toolDescriptions}
-  - noop: Do nothing (ONLY when there is genuinely nothing to do)
+  - wait: Intentionally wait for 1 tick (use this for holding direction, waiting for external processes/user, or idling)
 
 IMPORTANT: 
-1. If a user asked a question and you have the answer, you MUST call respond_to_user. Do NOT noop when there is a pending question.
-2. If a command or tool fails repeatedly, DO NOT keep retrying the exact same arguments. Try a different approach or inform the user.
+1. If a user asked a question and you have the answer, you MUST call respond_to_user. Do NOT use wait when there is a pending question.
+2. If your last action failed (e.g. Command failed), you MUST NOT repeat the exact same command. Try a different approach.
 
 JSON format:
 {
@@ -167,9 +166,10 @@ async function callLLM(prompt: string): Promise<string> {
 // ── Update state ───────────────────────────────────────
 
 function updateState(state: State, output: LLMOutput, result: ToolResult): State {
+  const argStr = JSON.stringify(output.action.args);
   const actionDesc = result.ok
-    ? `${output.action.tool}(ok)`
-    : `${output.action.tool}(fail: ${result.error})`;
+    ? `${output.action.tool}(${argStr}) -> ok`
+    : `${output.action.tool}(${argStr}) -> fail: ${result.error}`;
 
   const last_actions = [...state.last_actions, actionDesc].slice(-3);
   const thought_history = [...(state.thought_history || []), output.thought].slice(-5);
@@ -312,7 +312,7 @@ async function main() {
     if (tickResponse) {
       const { output } = tickResponse;
 
-      if (output.action.tool === "noop") {
+      if (output.action.tool === "wait" || output.action.tool === "noop") {
         // Push the standby status directly into the interactive prompt 
         input.setPromptStatus(chalk.dim(`[Tick ${tickNum}] ${icon} Standby...`));
         // Still need to update state for pending changes
@@ -333,8 +333,16 @@ async function main() {
         }
         console.log(`${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${toolStr}`);
         
-        // EXECUTE TOOL HERE AFTER WE LOGGED IT
-        const toolResult = await executeTool(output.action.tool, output.action.args, tools);
+        let toolResult: ToolResult;
+        
+        // Anti-Looping System Guard
+        const lastAction = state.last_actions.length > 0 ? state.last_actions[state.last_actions.length - 1] : "";
+        if (lastAction.includes("fail:") && lastAction.startsWith(`${output.action.tool}(${JSON.stringify(output.action.args)})`)) {
+           toolResult = { ok: false, data: null, error: "SYSTEM GUARD: You repeated the EXACT same failed action. Stop looping! Try a different approach." };
+        } else {
+           toolResult = await executeTool(output.action.tool, output.action.args, tools);
+        }
+        
         state = updateState(state, output, toolResult);
 
         if (toolResult.ok) {
