@@ -19,10 +19,20 @@ export class InputBuffer extends EventEmitter {
 
     this.rl.on("line", (line) => {
       const trimmed = line.trim();
+      if (trimmed === "exit" || trimmed === "quit") {
+        console.log("\n👋 Exiting...");
+        process.exit(0);
+      }
       if (trimmed) {
         this.buffer.push(trimmed);
         this.emit("input", trimmed);
       }
+    });
+
+    // Handle Ctrl+C properly since readline intercepts it
+    this.rl.on("SIGINT", () => {
+      console.log("\n👋 Exiting (Ctrl+C)...");
+      process.exit(0);
     });
 
     this.rl.on("close", () => {

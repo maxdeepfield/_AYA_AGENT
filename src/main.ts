@@ -1,11 +1,13 @@
+import "dotenv/config";
 import { Ollama } from "ollama";
+import * as os from "node:os";
 import type { State, LLMOutput, ToolResult, ToolRegistry } from "./types.js";
 import { tools, executeTool } from "./tools.js";
 import { InputBuffer } from "./input.js";
 
 // ── Config ─────────────────────────────────────────────
 
-const MODEL = process.env.OLLAMA_MODEL || "qwen3.5:4b-q4_K_M";
+const MODEL = process.env.OLLAMA_MODEL || "Bored/gigachat3-10B-A1.8:latest";
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 const TICK_INTERVAL_MS = parseInt(process.env.TICK_INTERVAL || "5000", 10);
 const MAX_IDLE_TICKS = parseInt(process.env.MAX_IDLE || "999999", 10); // Infinity for testing
@@ -58,13 +60,16 @@ State:
 ${resultContext ? `\n${resultContext}` : ""}
 
 Current situation:
+Environment: ${os.type()} ${os.release()} (${os.platform()})
 ${situation}
 
 Available tools:
 ${toolDescriptions}
   - noop: Do nothing (ONLY when there is genuinely nothing to do)
 
-IMPORTANT: If a user asked a question and you have the answer, you MUST call respond_to_user. Do NOT noop when there is a pending question.
+IMPORTANT: 
+1. If a user asked a question and you have the answer, you MUST call respond_to_user. Do NOT noop when there is a pending question.
+2. If a command or tool fails repeatedly, DO NOT keep retrying the exact same arguments. Try a different approach or inform the user.
 
 JSON format:
 {
@@ -109,9 +114,45 @@ async function callLLM(prompt: string): Promise<string> {
   const response = await ollama.chat({
     model: MODEL,
     messages: [{ role: "user", content: prompt }],
-    options: { temperature: 0.3, num_predict: 500 },
+    options: { temperature: 0.3, num_predict: 1500 },
+    stream: true,
   });
-  return response.message.content;
+
+  let fullText = "";
+  let inThinkBlock = false;
+  let hasThought = false; // to write newline after think block
+
+  for await (const chunk of response) {
+    const txt = chunk.message.content;
+    
+    // Check if we entered a think block
+    if (!inThinkBlock && (txt.includes("<think>") || fullText.includes("<think>")) && !fullText.includes("</think>")) {
+      inThinkBlock = true;
+      hasThought = true;
+      process.stdout.write("\n  🧠 [Thinking/Reasoning]: ");
+      // Print the chunk if it contains text after <think>
+      const split = (fullText + txt).split("<think>");
+      if (split.length > 1 && split[1].trim()) {
+         process.stdout.write(split[1].replace(txt, "") + txt.replace("<think>", ""));
+      }
+      fullText += txt;
+      continue;
+    }
+
+    if (inThinkBlock) {
+      // If we see the closing tag in this chunk, print until the tag and stop
+      if (txt.includes("</think>")) {
+        inThinkBlock = false;
+        process.stdout.write(txt.split("</think>")[0] + "\n");
+      } else {
+        process.stdout.write(txt);
+      }
+    }
+    
+    fullText += txt;
+  }
+  
+  return fullText;
 }
 
 // ── Update state ───────────────────────────────────────
@@ -256,7 +297,7 @@ async function main() {
         console.log(`── Tick ${tickNum} ${icon} ──────────────────────────`);
         console.log(`  💭 ${output.thought}`);
         console.log(`  🔧 ${output.action.tool}(${JSON.stringify(output.action.args)})`);
-        
+
         if (toolResult.ok) {
           const dataStr = JSON.stringify(toolResult.data);
           console.log(`  ✓ ${dataStr.length > 200 ? dataStr.slice(0, 200) + "..." : dataStr}`);

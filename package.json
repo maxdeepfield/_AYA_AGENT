@@ -7,11 +7,12 @@
     "dev": "tsx watch src/main.ts"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "ollama": "^0.5.14"
   },
   "devDependencies": {
+    "@types/node": "^22.15.2",
     "tsx": "^4.19.4",
-    "typescript": "^5.8.3",
-    "@types/node": "^22.15.2"
+    "typescript": "^5.8.3"
   }
 }
