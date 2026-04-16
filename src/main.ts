@@ -4,6 +4,7 @@ import chalk from "chalk";
 import * as os from "node:os";
 import type { State, LLMOutput, ToolResult, ToolRegistry } from "./types.js";
 import { tools, executeTool } from "./tools.js";
+import { initMemory, searchEngrams } from "./memory.js";
 import { InputBuffer } from "./input.js";
 
 // ── Config ─────────────────────────────────────────────
@@ -29,7 +30,8 @@ function buildPrompt(
   state: State,
   situation: string,
   lastResult: ToolResult | null,
-  lastAction: string | null
+  lastAction: string | null,
+  subconsciousContext: string
 ): string {
   const toolDescriptions = Object.entries(tools)
     .map(([name, def]) => `  - ${name}: ${def.description}`)
@@ -63,8 +65,9 @@ State:
   Pending: ${state.pending || "nothing pending"}
   Recent thoughts: ${state.thought_history.slice(-3).join(" -> ") || "none"}
   Recent actions: ${state.last_actions.length > 0 ? state.last_actions.join(", ") : "none"}
-${resultContext ? `\n${resultContext}` : ""}
+${resultContext ? \`\\n\${resultContext}\` : ""}
 ${chatContext}
+${subconsciousContext}
 
 Current situation:
 Environment: ${os.type()} ${os.release()} (${os.platform()})
@@ -83,7 +86,6 @@ JSON format:
 {
   "thought": "one sentence why",
   "action": { "tool": "tool_name", "args": {} },
-  "memory_update": "key facts to remember",
   "pending_update": "what still needs to be done, or empty string if nothing"
 }`;
 }
@@ -93,8 +95,8 @@ JSON format:
 function parseLLMResponse(raw: string): LLMOutput | null {
   try {
     let cleaned = raw.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    if (cleaned.startsWith("\`\`\`")) {
+      cleaned = cleaned.replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`\s*$/, "");
     }
     const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return null;
@@ -108,7 +110,6 @@ function parseLLMResponse(raw: string): LLMOutput | null {
         tool: parsed.action.tool,
         args: parsed.action.args || {},
       },
-      memory_update: parsed.memory_update || "",
       pending_update: parsed.pending_update ?? null,
     };
   } catch {
@@ -179,9 +180,14 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
     chat_history.push({ role: "agent", content: String(output.action.args.text) });
   }
 
+  let new_working_memory = state.working_memory;
+  if (output.action.tool === "consolidate_thoughts" && result.ok) {
+    new_working_memory = String(output.action.args.new_working_memory);
+  }
+
   return {
-    goal_progress: output.memory_update || state.goal_progress,
-    working_memory: output.memory_update || state.working_memory,
+    goal_progress: state.goal_progress,
+    working_memory: new_working_memory,
     pending: output.pending_update !== null ? output.pending_update : state.pending,
     last_actions,
     thought_history,
@@ -206,14 +212,25 @@ async function tick(
     
     // Add to chat history
     state.chat_history = state.chat_history || [];
+    let userInputFull = "";
     for (const msg of userMessages) {
        state.chat_history.push({ role: "user", content: msg });
+       userInputFull += msg + " ";
+    }
+    
+    // Auto-RAG for implicit memory
+    if (userInputFull.length > 5) {
+       const memRes = await searchEngrams(userInputFull, 3);
+       if (memRes.ok && memRes.results && memRes.results.length > 0) {
+          const items = memRes.results.map((r: any) => `- ${r.topic}: ${r.text}`).join("\n");
+          situation += `\n\n[Auto-RAG / Subconscious Memory activated]\nPast knowledge relevant to user's message:\n${items}`;
+       }
     }
   } else {
     situation += "\nNo new user messages.";
   }
 
-  const prompt = buildPrompt(state, situation, lastResult, lastActionName);
+  const prompt = buildPrompt(state, situation, lastResult, lastActionName, "");
 
   let output: LLMOutput | null = null;
   let retries = 0;
@@ -240,6 +257,8 @@ async function tick(
 // ── Main: hybrid heartbeat loop ────────────────────────
 
 async function main() {
+  await initMemory();
+
   const input = new InputBuffer();
 
   let state: State = {

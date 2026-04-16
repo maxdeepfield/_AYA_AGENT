@@ -3,6 +3,7 @@ import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import chalk from "chalk";
 import type { ToolDef, ToolRegistry, ToolResult } from "./types.js";
+import { writeEngram, searchEngrams } from "./memory.js";
 
 const execAsync = promisify(exec);
 
@@ -179,6 +180,43 @@ export const tools: ToolRegistry = {
       }
     },
   },
+  
+  // ── New Memory Tools ─────────────────────────────────
+  
+  write_engram: {
+    description: "Write a permanent episodic memory to the RAG vector database. Args: { topic: string, text: string }",
+    async execute(args): Promise<ToolResult> {
+      const topic = args.topic as string;
+      const text = args.text as string;
+      if (!topic || !text) return { ok: false, data: null, error: "Missing 'topic' or 'text'" };
+      
+      const res = await writeEngram(topic, text);
+      if (!res.ok) return { ok: false, data: null, error: res.error };
+      return { ok: true, data: { mem_id: res.id, status: "Saved to subconscious memory." } };
+    }
+  },
+  
+  search_engrams: {
+    description: "Search subconscious memory via vector similarity. Args: { query: string }",
+    async execute(args): Promise<ToolResult> {
+      const query = args.query as string;
+      if (!query) return { ok: false, data: null, error: "Missing 'query'" };
+      
+      const res = await searchEngrams(query, 3);
+      if (!res.ok) return { ok: false, data: null, error: res.error };
+      return { ok: true, data: { results: res.results } };
+    }
+  },
+  
+  consolidate_thoughts: {
+    description: "Overwrite your internal working memory to compact it. USE THIS to clear out noise and retain ONLY vital facts as bullet points. Args: { new_working_memory: string }",
+    async execute(args): Promise<ToolResult> {
+      const mem = args.new_working_memory as string;
+      if (mem === undefined) return { ok: false, data: null, error: "Missing 'new_working_memory'" };
+      return { ok: true, data: { consolidated: true, new_memory_length: mem.length } };
+      // Note: The actual state mutation happens in the Controller 
+    }
+  }
 };
 
 // ── Execute by name ────────────────────────────────────

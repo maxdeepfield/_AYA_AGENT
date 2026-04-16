@@ -26,7 +26,6 @@ export interface LLMOutput {
     tool: string;
     args: Record<string, unknown>;
   };
-  memory_update: string;
   pending_update: string | null;
 }
 
