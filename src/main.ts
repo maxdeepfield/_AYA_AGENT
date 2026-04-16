@@ -18,10 +18,10 @@ const ollama = new Ollama({ host: OLLAMA_HOST });
 // ── Persistent goal ────────────────────────────────────
 
 const GOAL =
-  "You are a persistent assistant. Help the user with whatever they ask. " +
-  "When the user asks something, you MUST eventually respond to them using respond_to_user. " +
-  "Reading a file is not a response — you must ALSO call respond_to_user with the answer. " +
-  "If there is truly nothing to do and no pending questions, use noop.";
+  "You are Aya, an autonomous OS-level AI Agent. You are running locally on the user's machine and have full access to the file system and terminal. " +
+  "If the user asks about your code, you can use run_command (like 'dir' or 'ls') or read_file to examine your own source code in the Current Working Directory. " +
+  "Help the user with whatever they ask. When you answer a question or report a task's completion, you MUST use the respond_to_user tool. " +
+  "If there is genuinely nothing to do and no pending questions, use noop.";
 
 // ── Build prompt ───────────────────────────────────────
 
@@ -48,6 +48,11 @@ function buildPrompt(
     }
   }
 
+  // Build chat transcript
+  const chatContext = state.chat_history.length > 0 
+    ? "\nRecent Chat History:\n" + state.chat_history.map(m => `${m.role === 'user' ? 'User' : 'You'}: ${m.content}`).join("\n") 
+    : "";
+
   return `You are a system that picks one action per step.
 Respond ONLY with a JSON object. No markdown, no text outside JSON.
 
@@ -57,11 +62,14 @@ State:
   Progress: ${state.goal_progress || "none"}
   Memory: ${state.working_memory || "empty"}
   Pending: ${state.pending || "nothing pending"}
+  Recent thoughts: ${state.thought_history.slice(-3).join(" -> ") || "none"}
   Recent actions: ${state.last_actions.length > 0 ? state.last_actions.join(", ") : "none"}
 ${resultContext ? `\n${resultContext}` : ""}
+${chatContext}
 
 Current situation:
 Environment: ${os.type()} ${os.release()} (${os.platform()})
+Current Working Directory: ${process.cwd()}
 ${situation}
 
 Available tools:
@@ -164,12 +172,20 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
     : `${output.action.tool}(fail: ${result.error})`;
 
   const last_actions = [...state.last_actions, actionDesc].slice(-3);
+  const thought_history = [...(state.thought_history || []), output.thought].slice(-5);
+  
+  const chat_history = [...(state.chat_history || [])];
+  if (output.action.tool === "respond_to_user" && result.ok) {
+    chat_history.push({ role: "agent", content: String(output.action.args.text) });
+  }
 
   return {
     goal_progress: output.memory_update || state.goal_progress,
     working_memory: output.memory_update || state.working_memory,
     pending: output.pending_update !== null ? output.pending_update : state.pending,
     last_actions,
+    thought_history,
+    chat_history: chat_history.slice(-10), // keep last 10 messages
   };
 }
 
@@ -187,6 +203,12 @@ async function tick(
 
   if (userMessages.length > 0) {
     situation += `\nNew user messages:\n${userMessages.map((m) => `  - "${m}"`).join("\n")}`;
+    
+    // Add to chat history
+    state.chat_history = state.chat_history || [];
+    for (const msg of userMessages) {
+       state.chat_history.push({ role: "user", content: msg });
+    }
   } else {
     situation += "\nNo new user messages.";
   }
@@ -225,6 +247,8 @@ async function main() {
     working_memory: "",
     pending: "",
     last_actions: [],
+    thought_history: [],
+    chat_history: [],
   };
 
   let tickNum = 0;
@@ -301,7 +325,12 @@ async function main() {
         console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
         console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
         
-        const toolStr = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
+        let toolStr = "";
+        if (output.action.tool === "respond_to_user") {
+          toolStr = `${output.action.tool}( [hidden payload] )`;
+        } else {
+          toolStr = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
+        }
         console.log(`${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${toolStr}`);
         
         // EXECUTE TOOL HERE AFTER WE LOGGED IT

@@ -130,6 +130,42 @@ export const tools: ToolRegistry = {
   write_file,
   web_search,
   run_command,
+  fetch_url: {
+    description: "Read the text content of a URL. Args: { url: string }",
+    async execute(args): Promise<ToolResult> {
+      const url = args.url as string;
+      if (!url) return { ok: false, data: null, error: "Missing 'url'" };
+
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          return { ok: false, data: null, error: `HTTP ${response.status} ${response.statusText}` };
+        }
+        
+        let text = await response.text();
+        
+        // Basic HTML stripping to protect context window
+        if (text.includes("<html") || text.includes("<body")) {
+           // strip scripts and styles
+           text = text.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, " ")
+                      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, " ");
+           // strip tags
+           text = text.replace(/<[^>]+>/g, " ");
+           // collapse spaces
+           text = text.replace(/\s+/g, " ").trim();
+        }
+        
+        // Truncate to a safe limit, 5000 chars is roughly 1000-1500 tokens
+        if (text.length > 5000) {
+           text = text.slice(0, 5000) + "... [truncated]";
+        }
+
+        return { ok: true, data: { url, content: text } };
+      } catch (e: any) {
+        return { ok: false, data: null, error: e.message };
+      }
+    },
+  },
 };
 
 // ── Execute by name ────────────────────────────────────

@@ -10,6 +10,8 @@ export interface State {
   working_memory: string;
   pending: string;
   last_actions: string[];
+  thought_history: string[];
+  chat_history: { role: string; content: string }[];
 }
 
 export interface ToolResult {
