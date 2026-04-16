@@ -103,8 +103,13 @@ const run_command: ToolDef = {
     const command = args.command as string;
     if (!command) return { ok: false, data: null, error: "Missing 'command' argument" };
     
+    let finalCmd = command;
+    if (process.platform === 'win32') {
+       finalCmd = `chcp 65001 > nul & ${command}`;
+    }
+
     try {
-      const { stdout, stderr } = await execAsync(command, { timeout: 15000 });
+      const { stdout, stderr } = await execAsync(finalCmd, { timeout: 15000 });
       return { 
         ok: true, 
         data: { 
@@ -113,10 +118,18 @@ const run_command: ToolDef = {
         } 
       };
     } catch (e: any) {
+      let msg = e.message || String(e);
+      let out = e.stdout || '';
+      let err = e.stderr || '';
+      
+      if (process.platform === 'win32') {
+         msg = msg.replace("chcp 65001 > nul & ", "");
+      }
+      
       return { 
         ok: false, 
         data: null, 
-        error: `Command failed: ${e.message}. stdout: ${e.stdout?.slice(0, 500) || ''}. stderr: ${e.stderr?.slice(0, 500) || ''}`
+        error: `Command failed: ${msg}. stdout: ${out.slice(0, 500)}. stderr: ${err.slice(0, 500)}`
       };
     }
   },
