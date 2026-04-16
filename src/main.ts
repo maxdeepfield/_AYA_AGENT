@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { Ollama } from "ollama";
+import chalk from "chalk";
 import * as os from "node:os";
 import type { State, LLMOutput, ToolResult, ToolRegistry } from "./types.js";
 import { tools, executeTool } from "./tools.js";
@@ -129,7 +130,7 @@ async function callLLM(prompt: string): Promise<string> {
     if (!inThinkBlock && (txt.includes("<think>") || fullText.includes("<think>")) && !fullText.includes("</think>")) {
       inThinkBlock = true;
       hasThought = true;
-      process.stdout.write("\n  🧠 [Thinking/Reasoning]: ");
+      process.stdout.write(`\n  ${chalk.magenta("🧠 Reasoning: ")}`);
       // Print the chunk if it contains text after <think>
       const split = (fullText + txt).split("<think>");
       if (split.length > 1 && split[1].trim()) {
@@ -180,7 +181,7 @@ async function tick(
   tickNum: number,
   lastResult: ToolResult | null,
   lastActionName: string | null
-): Promise<{ state: State; result: ToolResult; output: LLMOutput } | null> {
+): Promise<{ output: LLMOutput } | null> {
   const now = new Date().toISOString();
   let situation = `Time: ${now}`;
 
@@ -210,10 +211,8 @@ async function tick(
     return null;
   }
 
-  const result = await executeTool(output.action.tool, output.action.args, tools);
-  const newState = updateState(state, output, result);
-
-  return { state: newState, result, output };
+  // We return the output directly so the heartbeat can log the intention BEFORE executing the tool
+  return { output };
 }
 
 // ── Main: hybrid heartbeat loop ────────────────────────
@@ -235,12 +234,13 @@ async function main() {
   let lastResult: ToolResult | null = null;
   let lastActionName: string | null = null;
 
-  console.log("═══════════════════════════════════════");
-  console.log("  AYA Agent — Hybrid Interactive Mode");
-  console.log(`  Model: ${MODEL}`);
-  console.log(`  Tick interval: ${TICK_INTERVAL_MS}ms`);
-  console.log(`  Type messages anytime. Type 'exit' to quit.`);
-  console.log("═══════════════════════════════════════\n");
+  console.log(chalk.cyan("══════════════════════════════════════════════════════════"));
+  console.log(chalk.cyanBright.bold("  A Y A   A G E N T  ") + chalk.gray("v0.1.0"));
+  console.log(chalk.cyan("══════════════════════════════════════════════════════════"));
+  console.log(`${chalk.green("●")} System Online`);
+  console.log(`${chalk.blue("⚙")} Model: ${chalk.whiteBright(MODEL)}`);
+  console.log(`${chalk.blue("⏱")} Interval: ${chalk.whiteBright(TICK_INTERVAL_MS)}ms`);
+  console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit.\n"));
 
   input.on("input", (msg: string) => {
     console.log(`  📩 Buffered: "${msg}"`);
@@ -283,36 +283,47 @@ async function main() {
     // ── Run tick
     const icon = hasInput ? "💬" : hasPending ? "⚙️" : "⏳";
 
-    const result = await tick(state, messages, tickNum, lastResult, lastActionName);
+    const tickResponse = await tick(state, messages, tickNum, lastResult, lastActionName);
 
-    if (result) {
-      const { output, result: toolResult } = result;
+    if (tickResponse) {
+      const { output } = tickResponse;
 
       if (output.action.tool === "noop") {
-        // Compact logging for noop - overwrites the same line
-        process.stdout.write(`\r  [Tick ${tickNum}] ${icon} noop...               `);
+        // Push the standby status directly into the interactive prompt 
+        input.setPromptStatus(chalk.dim(`[Tick ${tickNum}] ${icon} Standby...`));
+        // Still need to update state for pending changes
+        state = updateState(state, output, { ok: true, data: null });
+        lastResult = { ok: true, data: null };
       } else {
-        // Clear the compact line first
-        process.stdout.write("\r" + " ".repeat(40) + "\r");
-        console.log(`── Tick ${tickNum} ${icon} ──────────────────────────`);
-        console.log(`  💭 ${output.thought}`);
-        console.log(`  🔧 ${output.action.tool}(${JSON.stringify(output.action.args)})`);
+        // Agent is acting! Update prompt to active state
+        input.setPromptStatus(chalk.green(`[Tick ${tickNum}] ⚙ Active...`));
+        
+        console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
+        console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
+        
+        const toolStr = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
+        console.log(`${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${toolStr}`);
+        
+        // EXECUTE TOOL HERE AFTER WE LOGGED IT
+        const toolResult = await executeTool(output.action.tool, output.action.args, tools);
+        state = updateState(state, output, toolResult);
 
         if (toolResult.ok) {
           const dataStr = JSON.stringify(toolResult.data);
-          console.log(`  ✓ ${dataStr.length > 200 ? dataStr.slice(0, 200) + "..." : dataStr}`);
+          const preview = dataStr.length > 200 ? dataStr.slice(0, 200) + "..." : dataStr;
+          console.log(`${chalk.cyan("│")} ${chalk.green("✓ Result:")}   ${chalk.dim(preview)}`);
         } else {
-          console.log(`  ✗ ${toolResult.error}`);
+          console.log(`${chalk.cyan("│")} ${chalk.red("✗ Error:")}    ${toolResult.error}`);
         }
 
         if (output.pending_update) {
-          console.log(`  📋 Pending: ${output.pending_update}`);
+          console.log(`${chalk.cyan("│")} ${chalk.blue("📋 Task:")}      ${output.pending_update}`);
         }
-        console.log(""); // Empty line for spacing
+        console.log(chalk.cyan(`╰──────────────────────────────────────────────────`));
+        
+        lastResult = toolResult;
       }
 
-      state = result.state;
-      lastResult = toolResult;
       lastActionName = output.action.tool;
     }
 

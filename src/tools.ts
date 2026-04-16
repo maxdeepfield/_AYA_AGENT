@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import chalk from "chalk";
 import type { ToolDef, ToolRegistry, ToolResult } from "./types.js";
 
 const execAsync = promisify(exec);
@@ -11,8 +12,12 @@ const respond_to_user: ToolDef = {
   description: "Send a message to the user. Args: { text: string }",
   async execute(args): Promise<ToolResult> {
     const text = args.text as string;
-    if (!text) return { ok: false, data: null, error: "Missing 'text' argument" };
-    console.log(`\n  💬 Agent → User: ${text}\n`);
+    if (!text) return { ok: false, data: null, error: "Missing 'text'" };
+    
+    console.log(`\n${chalk.cyan("╭──────────────────────────────────────────────────")}`);
+    console.log(`${chalk.cyan("│")} ${chalk.greenBright("🤖 AYA:")} ${chalk.whiteBright(text)}`);
+    console.log(`${chalk.cyan("╰──────────────────────────────────────────────────")}`);
+    
     return { ok: true, data: { delivered: true } };
   },
 };
