@@ -52,6 +52,10 @@ function buildPrompt(
         .join("\n")}`
     : "";
 
+  const awaitingText = state.awaiting_answer
+    ? `\n⚠️ AWAITING USER ANSWER to your question: "${state.awaiting_answer.question}"\nNext user message will be their answer.`
+    : "";
+
   return SYSTEM_PROMPT_TEMPLATE
     .replace("{DIRECTIVES}", DIRECTIVES)
     .replace("{mission_progress}", state.mission_progress || "none")
@@ -60,7 +64,7 @@ function buildPrompt(
     .replace("{recent_thoughts}", state.thought_history.slice(-3).join(" -> ") || "none")
     .replace("{recent_actions}", state.last_actions.length ? state.last_actions.join(", ") : "none")
     .replace("{result_text}", resultText)
-    .replace("{chat_text}", chatText)
+    .replace("{chat_text}", chatText + awaitingText)
     .replace("{os_info}", `${os.type()} ${os.release()} (${os.platform()})`)
     .replace("{cwd}", process.cwd())
     .replace("{situation}", situation)
@@ -139,6 +143,18 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
     result.ok ? "ok" : `fail: ${result.error}`
   }`;
 
+  // Handle ask_user tool
+  let awaitingAnswer = state.awaiting_answer;
+  if (output.action.tool === "ask_user" && result.ok) {
+    awaitingAnswer = {
+      question: String(output.action.args.question),
+      asked_at: Date.now(),
+    };
+  } else if (output.action.tool === "respond_to_user" && result.ok && state.awaiting_answer) {
+    // Clear awaiting_answer after responding
+    awaitingAnswer = null;
+  }
+
   return {
     ...state,
     working_memory:
@@ -154,7 +170,10 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
     chat_history:
       output.action.tool === "respond_to_user" && result.ok
         ? [...state.chat_history, { role: "agent", content: String(output.action.args.text) }].slice(-10)
+        : output.action.tool === "ask_user" && result.ok
+        ? [...state.chat_history, { role: "agent", content: String(output.action.args.question) }].slice(-10)
         : state.chat_history.slice(-10),
+    awaiting_answer: awaitingAnswer,
   };
 }
 
@@ -180,7 +199,16 @@ async function tick(
   let situation = `Time: ${new Date().toISOString()}`;
 
   if (userMessages.length) {
-    situation += `\nNew user messages:\n${userMessages.map((message) => `  - "${message}"`).join("\n")}`;
+    // If we're awaiting an answer, treat first message as the answer
+    if (state.awaiting_answer) {
+      situation += `\n⚠️ USER ANSWERED YOUR QUESTION!\nYour question was: "${state.awaiting_answer.question}"\nUser's answer: "${userMessages[0]}"`;
+      if (userMessages.length > 1) {
+        situation += `\nAdditional messages:\n${userMessages.slice(1).map((m) => `  - "${m}"`).join("\n")}`;
+      }
+    } else {
+      situation += `\nNew user messages:\n${userMessages.map((message) => `  - "${message}"`).join("\n")}`;
+    }
+    
     state.chat_history.push(...userMessages.map((content) => ({ role: "user", content })));
 
     const combinedInput = userMessages.join(" ");
@@ -263,6 +291,7 @@ async function main() {
     last_actions: [],
     thought_history: [],
     chat_history: [],
+    awaiting_answer: null,
   };
   
   const savedState = await loadState();
@@ -274,6 +303,7 @@ async function main() {
       working_memory: savedState.working_memory || "",
       pending: savedState.pending || "",
       chat_history: savedState.chat_history || [],
+      awaiting_answer: null, // Don't restore awaiting_answer across restarts
     };
   }
 
@@ -290,7 +320,8 @@ async function main() {
   console.log(`${chalk.green("●")} System Online`);
   console.log(`${chalk.blue("⚙")} Model: ${chalk.whiteBright(MODEL)}`);
   console.log(`${chalk.blue("⏱")} Interval: ${chalk.whiteBright(TICK_INTERVAL_MS)}ms`);
-  console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit.\n"));
+  console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit."));
+  console.log(chalk.cyan("══════════════════════════════════════════════════════════\n"));
 
   input.on("input", (message: string) => {
     console.log(`  📩 Buffered (Console): "${message}"`);
@@ -304,7 +335,8 @@ async function main() {
     socket.emit("sync_state", {
       chat_history: state.chat_history,
       mission_progress: state.mission_progress,
-      pending: state.pending
+      pending: state.pending,
+      awaiting_answer: state.awaiting_answer,
     });
 
     socket.on("message", (msg: string) => {
@@ -333,7 +365,7 @@ async function main() {
       tickNum++;
       const messages = input.drain();
       const hasInput = messages.length > 0;
-      const hasPending = Boolean(state.pending);
+      const hasPending = Boolean(state.pending || state.awaiting_answer);
 
       if (messages.some((message) => /^(exit|quit)$/i.test(message))) {
         console.log("\n👋 Goodbye.\n");

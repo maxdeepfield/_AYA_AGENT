@@ -57,9 +57,14 @@ export class InputBuffer extends EventEmitter {
     return messages;
   }
 
+  push(message: string) {
+    this.buffer.push(message);
+    this.emit("input", message);
+  }
+
   setPromptStatus(statusText: string) {
     if (this.isClosed) return;
-    this.rl.setPrompt(`${statusText} ${chalk.yellow("❯ ")}`);
+    this.rl.setPrompt(`${statusText}\n${chalk.yellow("❯ ")}`);
     this.rl.prompt(true);
   }
 

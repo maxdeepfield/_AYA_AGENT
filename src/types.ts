@@ -5,6 +5,7 @@ export interface State {
   last_actions: string[];
   thought_history: string[];
   chat_history: { role: string; content: string }[];
+  awaiting_answer: { question: string; asked_at: number } | null;
 }
 
 export interface ToolResult {

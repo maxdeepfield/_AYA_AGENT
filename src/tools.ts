@@ -26,6 +26,31 @@ const respond_to_user: ToolDef = {
   },
 };
 
+const ask_user: ToolDef = {
+  description: "Ask the user a question and wait for their answer. Use this when you need information from the user. Args: { question: string }",
+  async execute(args): Promise<ToolResult> {
+    const question = args.question as string;
+    if (!question) return { ok: false, data: null, error: "Missing 'question'" };
+
+    console.log(`\n${chalk.cyan("╭──────────────────────────────────────────────────")}`);
+    console.log(`${chalk.cyan("│")} ${chalk.yellowBright("❓ AYA:")} ${chalk.whiteBright(question)}`);
+    console.log(`${chalk.cyan("╰──────────────────────────────────────────────────")}`);
+    
+    // Send to web/mobile client
+    const { socketEvents } = await import("./main.js");
+    socketEvents.emit("chat_update", { role: "agent", content: question, type: "question" });
+
+    return { 
+      ok: true, 
+      data: { 
+        question_asked: true,
+        awaiting_answer: true,
+        asked_at: Date.now()
+      } 
+    };
+  },
+};
+
 const read_file: ToolDef = {
   description: "Read contents of a file. Args: { path: string }",
   async execute(args): Promise<ToolResult> {
@@ -136,6 +161,7 @@ const run_command: ToolDef = {
 
 export const tools: ToolRegistry = {
   respond_to_user,
+  ask_user,
   read_file,
   write_file,
   web_search,

@@ -15,8 +15,14 @@ export async function initMemory() {
   }
 
   try {
-    client = new MongoClient(uri);
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 5000, // 5 second timeout
+      connectTimeoutMS: 5000,
+    });
+    
+    console.log(chalk.gray("⏳ Connecting to MongoDB..."));
     await client.connect();
+    
     const db = client.db("aya_agent");
     const collections = await db.listCollections({ name: "engrams" }).toArray();
     if (collections.length === 0) {
@@ -47,8 +53,10 @@ export async function initMemory() {
       console.log(chalk.green("✨ Vector Search index created."));
     }
   } catch (e: any) {
-    console.error(chalk.red(`❌ Fatal Memory Error: ${e.message}`));
-    throw e; // Strict mode: fail if database is not compatible
+    console.log(chalk.yellow(`⚠️  MongoDB connection failed: ${e.message}`));
+    console.log(chalk.yellow("⚠️  Continuing without episodic memory..."));
+    client = null;
+    engramsCollection = null;
   }
 }
 
