@@ -5,17 +5,15 @@ import { Ollama } from "ollama";
 import { InputBuffer } from "./input.js";
 import { initMemory, searchEngrams } from "./memory.js";
 import { executeTool, tools } from "./tools.js";
+import { DEFAULT_DIRECTIVES, DEFAULT_MISSION, SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
 import type { LLMOutput, State, ToolResult } from "./types.js";
 
 const MODEL = process.env.OLLAMA_MODEL || "Bored/gigachat3-10B-A1.8:latest";
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 const TICK_INTERVAL_MS = Number.parseInt(process.env.TICK_INTERVAL || "5000", 10);
 const MAX_IDLE_TICKS = Number.parseInt(process.env.MAX_IDLE || "999999", 10);
-const DEFAULT_SUPER_GOAL =
-  process.env.DEFAULT_SUPER_GOAL ||
-  "Stay ready and useful while idle. Do not perform speculative exploration of the project or system without a concrete trigger. If there is no clear task, preserve context, watch for new input, and wait.";
-const GOAL =
-  "You are Aya, a local OS-level agent with terminal and filesystem access. Treat references to 'you' as this local project/app instance. Use respond_to_user whenever you answer the user or report completion. If there is nothing useful to do, wait.";
+const DIRECTIVES = process.env.DIRECTIVES || DEFAULT_DIRECTIVES;
+const MISSION = process.env.MISSION || DEFAULT_MISSION;
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 
@@ -42,42 +40,19 @@ function buildPrompt(
         .join("\n")}`
     : "";
 
-  return `You are a system that picks one action per step.
-Respond ONLY with a JSON object. No markdown, no text outside JSON.
-
-Goal: ${GOAL}
-
-State:
-  Progress: ${state.goal_progress || "none"}
-  Memory: ${state.working_memory || "empty"}
-  Pending: ${state.pending || "nothing pending"}
-  Recent thoughts: ${state.thought_history.slice(-3).join(" -> ") || "none"}
-  Recent actions: ${state.last_actions.length ? state.last_actions.join(", ") : "none"}${resultText}${chatText}
-
-Current situation:
-Environment: ${os.type()} ${os.release()} (${os.platform()})
-Current Working Directory: ${process.cwd()}
-${situation}
-
-Available tools:
-${toolDescriptions}
-  - wait: Intentionally wait for 1 tick
-
-IMPORTANT:
-1. If you can answer the user now, use respond_to_user.
-2. Do not repeat the exact same failed action.
-3. Prefer direct concrete actions over abstract self-limitations.
-4. Treat references to "you" or "yourself" as this local codebase and runtime.
-5. When idle without a clear task, choose wait.
-6. Prefer purpose-built tools over hand-written shell commands.
-7. After repeated filesystem or shell failures, inspect context or report the blocker.
-
-JSON format:
-{
-  "thought": "one sentence why",
-  "action": { "tool": "tool_name", "args": {} },
-  "pending_update": "what still needs to be done, or empty string if nothing"
-}`;
+  return SYSTEM_PROMPT_TEMPLATE
+    .replace("{DIRECTIVES}", DIRECTIVES)
+    .replace("{mission_progress}", state.mission_progress || "none")
+    .replace("{working_memory}", state.working_memory || "empty")
+    .replace("{pending}", state.pending || "nothing pending")
+    .replace("{recent_thoughts}", state.thought_history.slice(-3).join(" -> ") || "none")
+    .replace("{recent_actions}", state.last_actions.length ? state.last_actions.join(", ") : "none")
+    .replace("{result_text}", resultText)
+    .replace("{chat_text}", chatText)
+    .replace("{os_info}", `${os.type()} ${os.release()} (${os.platform()})`)
+    .replace("{cwd}", process.cwd())
+    .replace("{situation}", situation)
+    .replace("{tool_descriptions}", toolDescriptions);
 }
 
 function parseLLMResponse(raw: string): LLMOutput | null {
@@ -189,8 +164,8 @@ async function tick(
       }
     }
   } else {
-    if (!state.pending) state.pending = DEFAULT_SUPER_GOAL;
-    situation += `\nNo new user messages.\n${state.pending === DEFAULT_SUPER_GOAL ? "Default super goal activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
+    if (!state.pending) state.pending = MISSION;
+    situation += `\nNo new user messages.\n${state.pending === MISSION ? "Mission activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
   }
 
   const prompt = buildPrompt(state, situation, lastResult, lastActionName);
@@ -254,7 +229,7 @@ async function main() {
 
   const input = new InputBuffer();
   let state: State = {
-    goal_progress: "",
+    mission_progress: "",
     working_memory: "",
     pending: "",
     last_actions: [],

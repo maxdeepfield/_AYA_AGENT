@@ -1,5 +1,5 @@
 export interface State {
-  goal_progress: string;
+  mission_progress: string;
   working_memory: string;
   pending: string;
   last_actions: string[];
