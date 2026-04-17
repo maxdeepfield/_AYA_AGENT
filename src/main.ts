@@ -1,57 +1,45 @@
 import "dotenv/config";
-import { Ollama } from "ollama";
 import chalk from "chalk";
 import * as os from "node:os";
-import type { State, LLMOutput, ToolResult, ToolRegistry } from "./types.js";
-import { tools, executeTool } from "./tools.js";
-import { initMemory, searchEngrams } from "./memory.js";
+import { Ollama } from "ollama";
 import { InputBuffer } from "./input.js";
-
-// ── Config ─────────────────────────────────────────────
+import { initMemory, searchEngrams } from "./memory.js";
+import { executeTool, tools } from "./tools.js";
+import type { LLMOutput, State, ToolResult } from "./types.js";
 
 const MODEL = process.env.OLLAMA_MODEL || "Bored/gigachat3-10B-A1.8:latest";
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
-const TICK_INTERVAL_MS = parseInt(process.env.TICK_INTERVAL || "5000", 10);
-const MAX_IDLE_TICKS = parseInt(process.env.MAX_IDLE || "999999", 10); // Infinity for testing
+const TICK_INTERVAL_MS = Number.parseInt(process.env.TICK_INTERVAL || "5000", 10);
+const MAX_IDLE_TICKS = Number.parseInt(process.env.MAX_IDLE || "999999", 10);
+const DEFAULT_SUPER_GOAL =
+  process.env.DEFAULT_SUPER_GOAL ||
+  "Stay ready and useful while idle. Do not perform speculative exploration of the project or system without a concrete trigger. If there is no clear task, preserve context, watch for new input, and wait.";
+const GOAL =
+  "You are Aya, a local OS-level agent with terminal and filesystem access. Treat references to 'you' as this local project/app instance. Use respond_to_user whenever you answer the user or report completion. If there is nothing useful to do, wait.";
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
-
-// ── Persistent goal ────────────────────────────────────
-
-const GOAL =
-  "You are Aya, an autonomous OS-level AI Agent. You are running locally on the user's machine and have full access to the file system and terminal. " +
-  "If the user asks about your code, you can use run_command or read_file to examine your own source code in the Current Working Directory. " +
-  "Help the user with whatever they ask. When you answer a question or report a task's completion, you MUST use the respond_to_user tool. " +
-  "If there is genuinely nothing to do and no pending questions, use wait.";
-
-// ── Build prompt ───────────────────────────────────────
 
 function buildPrompt(
   state: State,
   situation: string,
   lastResult: ToolResult | null,
-  lastAction: string | null,
-  subconsciousContext: string
+  lastAction: string | null
 ): string {
   const toolDescriptions = Object.entries(tools)
     .map(([name, def]) => `  - ${name}: ${def.description}`)
     .join("\n");
 
-  // Build last result context
-  let resultContext = "";
-  if (lastResult && lastAction) {
-    if (lastAction === "noop") {
-      resultContext = "Last action: noop (did nothing)";
-    } else {
-      const resultStr = JSON.stringify(lastResult.data);
-      // Truncate very large results
-      const truncated = resultStr.length > 800 ? resultStr.slice(0, 800) + "..." : resultStr;
-      resultContext = `Last action: ${lastAction}\nResult: ${truncated}`;
-    }
-  }
+  const resultText =
+    lastResult && lastAction
+      ? lastAction === "noop"
+        ? "\nLast action: noop (did nothing)"
+        : `\nLast action: ${lastAction}\nResult: ${String(JSON.stringify(lastResult.data) ?? lastResult.data).slice(0, 800)}`
+      : "";
 
-  const chatContext = state.chat_history.length > 0 
-    ? "\nRecent Chat History:\n" + state.chat_history.map(m => `${m.role === 'user' ? 'User' : 'You'}: ${m.content}`).join("\n") 
+  const chatText = state.chat_history.length
+    ? `\nRecent Chat History:\n${state.chat_history
+        .map((message) => `${message.role === "user" ? "User" : "You"}: ${message.content}`)
+        .join("\n")}`
     : "";
 
   return `You are a system that picks one action per step.
@@ -64,10 +52,7 @@ State:
   Memory: ${state.working_memory || "empty"}
   Pending: ${state.pending || "nothing pending"}
   Recent thoughts: ${state.thought_history.slice(-3).join(" -> ") || "none"}
-  Recent actions: ${state.last_actions.length > 0 ? state.last_actions.join(", ") : "none"}
-${resultContext ? \`\\n\${resultContext}\` : ""}
-${chatContext}
-${subconsciousContext}
+  Recent actions: ${state.last_actions.length ? state.last_actions.join(", ") : "none"}${resultText}${chatText}
 
 Current situation:
 Environment: ${os.type()} ${os.release()} (${os.platform()})
@@ -76,11 +61,16 @@ ${situation}
 
 Available tools:
 ${toolDescriptions}
-  - wait: Intentionally wait for 1 tick (use this for holding direction, waiting for external processes/user, or idling)
+  - wait: Intentionally wait for 1 tick
 
-IMPORTANT: 
-1. If a user asked a question and you have the answer, you MUST call respond_to_user. Do NOT use wait when there is a pending question.
-2. If your last action failed (e.g. Command failed), you MUST NOT repeat the exact same command. Try a different approach.
+IMPORTANT:
+1. If you can answer the user now, use respond_to_user.
+2. Do not repeat the exact same failed action.
+3. Prefer direct concrete actions over abstract self-limitations.
+4. Treat references to "you" or "yourself" as this local codebase and runtime.
+5. When idle without a clear task, choose wait.
+6. Prefer purpose-built tools over hand-written shell commands.
+7. After repeated filesystem or shell failures, inspect context or report the blocker.
 
 JSON format:
 {
@@ -90,19 +80,18 @@ JSON format:
 }`;
 }
 
-// ── Parse LLM response ────────────────────────────────
-
 function parseLLMResponse(raw: string): LLMOutput | null {
   try {
     let cleaned = raw.trim();
-    if (cleaned.startsWith("\`\`\`")) {
-      cleaned = cleaned.replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`\s*$/, "");
+    if (cleaned.startsWith("```")) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
     }
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
 
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (!parsed.action || typeof parsed.action.tool !== "string") return null;
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    const parsed = JSON.parse(match[0]);
+    if (typeof parsed?.action?.tool !== "string") return null;
 
     return {
       thought: parsed.thought || "",
@@ -117,8 +106,6 @@ function parseLLMResponse(raw: string): LLMOutput | null {
   }
 }
 
-// ── Call LLM ───────────────────────────────────────────
-
 async function callLLM(prompt: string): Promise<string> {
   const response = await ollama.chat({
     model: MODEL,
@@ -129,138 +116,143 @@ async function callLLM(prompt: string): Promise<string> {
 
   let fullText = "";
   let inThinkBlock = false;
-  let hasThought = false; // to write newline after think block
 
   for await (const chunk of response) {
-    const txt = chunk.message.content;
-    
-    // Check if we entered a think block
-    if (!inThinkBlock && (txt.includes("<think>") || fullText.includes("<think>")) && !fullText.includes("</think>")) {
+    const text = chunk.message.content;
+    const combined = fullText + text;
+
+    if (!inThinkBlock && combined.includes("<think>") && !combined.includes("</think>")) {
       inThinkBlock = true;
-      hasThought = true;
       process.stdout.write(`\n  ${chalk.magenta("🧠 Reasoning: ")}`);
-      // Print the chunk if it contains text after <think>
-      const split = (fullText + txt).split("<think>");
-      if (split.length > 1 && split[1].trim()) {
-         process.stdout.write(split[1].replace(txt, "") + txt.replace("<think>", ""));
+      const visible = combined.split("<think>")[1] || "";
+      if (visible.trim()) {
+        process.stdout.write(visible.slice(0, Math.max(0, visible.length - text.length)) + text.replace("<think>", ""));
       }
-      fullText += txt;
+      fullText += text;
       continue;
     }
 
     if (inThinkBlock) {
-      // If we see the closing tag in this chunk, print until the tag and stop
-      if (txt.includes("</think>")) {
+      if (text.includes("</think>")) {
         inThinkBlock = false;
-        process.stdout.write(txt.split("</think>")[0] + "\n");
+        process.stdout.write(text.split("</think>")[0] + "\n");
       } else {
-        process.stdout.write(txt);
+        process.stdout.write(text);
       }
     }
-    
-    fullText += txt;
+
+    fullText += text;
   }
-  
+
   return fullText;
 }
 
-// ── Update state ───────────────────────────────────────
-
 function updateState(state: State, output: LLMOutput, result: ToolResult): State {
-  const argStr = JSON.stringify(output.action.args);
-  const actionDesc = result.ok
-    ? `${output.action.tool}(${argStr}) -> ok`
-    : `${output.action.tool}(${argStr}) -> fail: ${result.error}`;
-
-  const last_actions = [...state.last_actions, actionDesc].slice(-3);
-  const thought_history = [...(state.thought_history || []), output.thought].slice(-5);
-  
-  const chat_history = [...(state.chat_history || [])];
-  if (output.action.tool === "respond_to_user" && result.ok) {
-    chat_history.push({ role: "agent", content: String(output.action.args.text) });
-  }
-
-  let new_working_memory = state.working_memory;
-  if (output.action.tool === "consolidate_thoughts" && result.ok) {
-    new_working_memory = String(output.action.args.new_working_memory);
-  }
+  const actionText = `${output.action.tool}(${JSON.stringify(output.action.args)}) -> ${
+    result.ok ? "ok" : `fail: ${result.error}`
+  }`;
 
   return {
-    goal_progress: state.goal_progress,
-    working_memory: new_working_memory,
-    pending: output.pending_update !== null ? output.pending_update : state.pending,
-    last_actions,
-    thought_history,
-    chat_history: chat_history.slice(-10), // keep last 10 messages
+    ...state,
+    working_memory:
+      output.action.tool === "consolidate_thoughts" && result.ok
+        ? String(output.action.args.new_working_memory)
+        : state.working_memory,
+    pending: output.pending_update ?? state.pending,
+    last_actions: [...state.last_actions, actionText].slice(-3),
+    thought_history: [...state.thought_history, output.thought].slice(-5),
+    chat_history:
+      output.action.tool === "respond_to_user" && result.ok
+        ? [...state.chat_history, { role: "agent", content: String(output.action.args.text) }].slice(-10)
+        : state.chat_history.slice(-10),
   };
 }
-
-// ── One tick ───────────────────────────────────────────
 
 async function tick(
   state: State,
   userMessages: string[],
-  tickNum: number,
   lastResult: ToolResult | null,
   lastActionName: string | null
-): Promise<{ output: LLMOutput } | null> {
-  const now = new Date().toISOString();
-  let situation = `Time: ${now}`;
+): Promise<LLMOutput | null> {
+  let situation = `Time: ${new Date().toISOString()}`;
 
-  if (userMessages.length > 0) {
-    situation += `\nNew user messages:\n${userMessages.map((m) => `  - "${m}"`).join("\n")}`;
-    
-    // Add to chat history
-    state.chat_history = state.chat_history || [];
-    let userInputFull = "";
-    for (const msg of userMessages) {
-       state.chat_history.push({ role: "user", content: msg });
-       userInputFull += msg + " ";
-    }
-    
-    // Auto-RAG for implicit memory
-    if (userInputFull.length > 5) {
-       const memRes = await searchEngrams(userInputFull, 3);
-       if (memRes.ok && memRes.results && memRes.results.length > 0) {
-          const items = memRes.results.map((r: any) => `- ${r.topic}: ${r.text}`).join("\n");
-          situation += `\n\n[Auto-RAG / Subconscious Memory activated]\nPast knowledge relevant to user's message:\n${items}`;
-       }
+  if (userMessages.length) {
+    situation += `\nNew user messages:\n${userMessages.map((message) => `  - "${message}"`).join("\n")}`;
+    state.chat_history.push(...userMessages.map((content) => ({ role: "user", content })));
+
+    const combinedInput = userMessages.join(" ");
+    if (combinedInput.length > 5) {
+      const memoryResult = await searchEngrams(combinedInput, 3);
+      if (memoryResult.ok && memoryResult.results?.length) {
+        const items = memoryResult.results.map((result: any) => `- ${result.topic}: ${result.text}`).join("\n");
+        situation += `\n\n[Auto-RAG / Subconscious Memory activated]\nPast knowledge relevant to user's message:\n${items}`;
+      }
     }
   } else {
-    situation += "\nNo new user messages.";
+    if (!state.pending) state.pending = DEFAULT_SUPER_GOAL;
+    situation += `\nNo new user messages.\n${state.pending === DEFAULT_SUPER_GOAL ? "Default super goal activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
   }
 
-  const prompt = buildPrompt(state, situation, lastResult, lastActionName, "");
+  const prompt = buildPrompt(state, situation, lastResult, lastActionName);
 
-  let output: LLMOutput | null = null;
-  let retries = 0;
-
-  while (!output && retries < 3) {
-    if (retries > 0) console.log(`  ⟳ Retry ${retries}...`);
-    const raw = await callLLM(prompt);
-    output = parseLLMResponse(raw);
-    if (!output) {
-      console.log(`  ⚠ Invalid JSON. Raw: ${raw.slice(0, 150)}`);
-      retries++;
-    }
+  for (let retry = 0; retry < 3; retry++) {
+    if (retry > 0) console.log(`  ⟳ Retry ${retry}...`);
+    const output = parseLLMResponse(await callLLM(prompt));
+    if (output) return output;
   }
 
-  if (!output) {
-    console.log(`  ✖ Failed to parse LLM response.`);
-    return null;
-  }
-
-  // We return the output directly so the heartbeat can log the intention BEFORE executing the tool
-  return { output };
+  console.log("  ✖ Failed to parse LLM response.");
+  return null;
 }
 
-// ── Main: hybrid heartbeat loop ────────────────────────
+function logPlannedAction(tickNum: number, icon: string, output: LLMOutput) {
+  console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
+  console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
+  console.log(
+    `${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${
+      output.action.tool === "respond_to_user"
+        ? "respond_to_user( [hidden payload] )"
+        : `${output.action.tool}(${JSON.stringify(output.action.args)})`
+    }`
+  );
+}
+
+async function runPlannedAction(state: State, output: LLMOutput): Promise<ToolResult> {
+  const actionText = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
+  if ((state.last_actions.at(-1) || "").startsWith(`${actionText} -> fail:`)) {
+    return {
+      ok: false,
+      data: null,
+      error: "SYSTEM GUARD: You repeated the exact same failed action. Try a different approach.",
+    };
+  }
+
+  return executeTool(output.action.tool, output.action.args, tools);
+}
+
+function logToolResult(result: ToolResult, pendingUpdate: string | null) {
+  if (result.ok) {
+    const preview = String(JSON.stringify(result.data) ?? result.data);
+    console.log(
+      `${chalk.cyan("│")} ${chalk.green("✓ Result:")}   ${chalk.dim(preview.slice(0, 200))}${
+        preview.length > 200 ? "..." : ""
+      }`
+    );
+  } else {
+    console.log(`${chalk.cyan("│")} ${chalk.red("✗ Error:")}    ${result.error}`);
+  }
+
+  if (pendingUpdate) {
+    console.log(`${chalk.cyan("│")} ${chalk.blue("📋 Task:")}      ${pendingUpdate}`);
+  }
+
+  console.log(chalk.cyan("╰──────────────────────────────────────────────────"));
+}
 
 async function main() {
   await initMemory();
 
   const input = new InputBuffer();
-
   let state: State = {
     goal_progress: "",
     working_memory: "",
@@ -285,106 +277,63 @@ async function main() {
   console.log(`${chalk.blue("⏱")} Interval: ${chalk.whiteBright(TICK_INTERVAL_MS)}ms`);
   console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit.\n"));
 
-  input.on("input", (msg: string) => {
-    console.log(`  📩 Buffered: "${msg}"`);
+  input.on("input", (message: string) => {
+    console.log(`  📩 Buffered: "${message}"`);
   });
 
   input.on("close", () => {
     running = false;
   });
 
-  async function heartbeat() {
+  const heartbeat = async () => {
     if (!running || tickInProgress) return;
     tickInProgress = true;
 
-    tickNum++;
-    const messages = input.drain();
-    const hasInput = messages.length > 0;
-    const hasPending = !!(state.pending && state.pending.length > 0);
+    try {
+      tickNum++;
+      const messages = input.drain();
+      const hasInput = messages.length > 0;
+      const hasPending = Boolean(state.pending);
 
-    // Check for exit
-    if (messages.some((m) => m.toLowerCase() === "exit" || m.toLowerCase() === "quit")) {
-      console.log("\n👋 Goodbye.\n");
-      running = false;
-      input.close();
-      clearInterval(timer);
-      tickInProgress = false;
-      return;
-    }
-
-    // Skip tick if truly idle: no input, no pending work, and idle too long
-    if (!hasInput && !hasPending) {
-      idleTicks++;
-      if (idleTicks > MAX_IDLE_TICKS) {
-        tickInProgress = false;
+      if (messages.some((message) => /^(exit|quit)$/i.test(message))) {
+        console.log("\n👋 Goodbye.\n");
+        running = false;
+        input.close();
+        clearInterval(timer);
+        process.exit(0);
         return;
       }
-    } else {
-      idleTicks = 0;
-    }
 
-    // ── Run tick
-    const icon = hasInput ? "💬" : hasPending ? "⚙️" : "⏳";
-
-    const tickResponse = await tick(state, messages, tickNum, lastResult, lastActionName);
-
-    if (tickResponse) {
-      const { output } = tickResponse;
-
-      if (output.action.tool === "wait" || output.action.tool === "noop") {
-        // Push the standby status directly into the interactive prompt 
-        input.setPromptStatus(chalk.dim(`[Tick ${tickNum}] ${icon} Standby...`));
-        // Still need to update state for pending changes
-        state = updateState(state, output, { ok: true, data: null });
-        lastResult = { ok: true, data: null };
+      if (!hasInput && !hasPending) {
+        idleTicks++;
+        if (idleTicks > MAX_IDLE_TICKS) return;
       } else {
-        // Agent is acting! Update prompt to active state
-        input.setPromptStatus(chalk.green(`[Tick ${tickNum}] ⚙ Active...`));
-        
-        console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
-        console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
-        
-        let toolStr = "";
-        if (output.action.tool === "respond_to_user") {
-          toolStr = `${output.action.tool}( [hidden payload] )`;
-        } else {
-          toolStr = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
-        }
-        console.log(`${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${toolStr}`);
-        
-        let toolResult: ToolResult;
-        
-        // Anti-Looping System Guard
-        const lastAction = state.last_actions.length > 0 ? state.last_actions[state.last_actions.length - 1] : "";
-        if (lastAction.includes("fail:") && lastAction.startsWith(`${output.action.tool}(${JSON.stringify(output.action.args)})`)) {
-           toolResult = { ok: false, data: null, error: "SYSTEM GUARD: You repeated the EXACT same failed action. Stop looping! Try a different approach." };
-        } else {
-           toolResult = await executeTool(output.action.tool, output.action.args, tools);
-        }
-        
-        state = updateState(state, output, toolResult);
-
-        if (toolResult.ok) {
-          const dataStr = JSON.stringify(toolResult.data);
-          const preview = dataStr.length > 200 ? dataStr.slice(0, 200) + "..." : dataStr;
-          console.log(`${chalk.cyan("│")} ${chalk.green("✓ Result:")}   ${chalk.dim(preview)}`);
-        } else {
-          console.log(`${chalk.cyan("│")} ${chalk.red("✗ Error:")}    ${toolResult.error}`);
-        }
-
-        if (output.pending_update) {
-          console.log(`${chalk.cyan("│")} ${chalk.blue("📋 Task:")}      ${output.pending_update}`);
-        }
-        console.log(chalk.cyan(`╰──────────────────────────────────────────────────`));
-        
-        lastResult = toolResult;
+        idleTicks = 0;
       }
 
-      lastActionName = output.action.tool;
-    }
+      const icon = hasInput ? "💬" : hasPending ? "⚙️" : "⏳";
+      const output = await tick(state, messages, lastResult, lastActionName);
+      if (!output) return;
 
-    tickInProgress = false;
-  }
+      lastActionName = output.action.tool;
+
+      if (output.action.tool === "wait" || output.action.tool === "noop") {
+        input.setPromptStatus(chalk.dim(`[Tick ${tickNum}] ${icon} Standby...`));
+        state = updateState(state, output, { ok: true, data: null });
+        lastResult = { ok: true, data: null };
+        return;
+      }
+
+      input.setPromptStatus(chalk.green(`[Tick ${tickNum}] ⚙ Active...`));
+      logPlannedAction(tickNum, icon, output);
+      const toolResult = await runPlannedAction(state, output);
+      state = updateState(state, output, toolResult);
+      lastResult = toolResult;
+      logToolResult(toolResult, output.pending_update);
+    } finally {
+      tickInProgress = false;
+    }
+  };
 
   const timer = setInterval(heartbeat, TICK_INTERVAL_MS);
   await heartbeat();

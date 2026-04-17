@@ -1,10 +1,3 @@
-// ── Types ──────────────────────────────────────────────
-
-export interface Goal {
-  description: string;
-  check: GoalCheck;
-}
-
 export interface State {
   goal_progress: string;
   working_memory: string;
@@ -28,8 +21,6 @@ export interface LLMOutput {
   };
   pending_update: string | null;
 }
-
-export type GoalCheck = (state: State, result: ToolResult | null) => boolean;
 
 export interface ToolDef {
   description: string;
