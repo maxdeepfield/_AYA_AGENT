@@ -17,7 +17,13 @@ export async function initMemory() {
   try {
     client = new MongoClient(uri);
     await client.connect();
-    engramsCollection = client.db("aya_agent").collection("engrams");
+    const db = client.db("aya_agent");
+    const collections = await db.listCollections({ name: "engrams" }).toArray();
+    if (collections.length === 0) {
+      console.log(chalk.gray("⏳ Creating collection 'engrams'..."));
+      await db.createCollection("engrams");
+    }
+    engramsCollection = db.collection("engrams");
     console.log(chalk.green("🧠 Subconscious Vector Memory connected (MongoDB)."));
 
     const indexes = await engramsCollection.listSearchIndexes().toArray();

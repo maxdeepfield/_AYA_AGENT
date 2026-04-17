@@ -33,6 +33,7 @@ IMPORTANT:
 5. When idle without a clear task, choose wait.
 6. Prefer purpose-built tools over hand-written shell commands.
 7. After repeated filesystem or shell failures, inspect context or report the blocker.
+8. If the last message in chat history is from YOU and there are no "New user messages", you MUST choose wait or noop. Do not greet or respond twice.
 
 JSON format:
 {

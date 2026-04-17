@@ -133,7 +133,10 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
       output.action.tool === "consolidate_thoughts" && result.ok
         ? String(output.action.args.new_working_memory)
         : state.working_memory,
-    pending: output.pending_update ?? state.pending,
+    pending:
+      output.action.tool === "respond_to_user" && result.ok && !output.pending_update
+        ? "" // Task complete after response
+        : output.pending_update ?? state.pending,
     last_actions: [...state.last_actions, actionText].slice(-3),
     thought_history: [...state.thought_history, output.thought].slice(-5),
     chat_history:
