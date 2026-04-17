@@ -15,8 +15,12 @@ export class InputBuffer extends EventEmitter {
   constructor() {
     super();
 
+    // Hijack console.log to preserve prompt
     console.log = (...args: unknown[]) => {
-      process.stdout.write("\x1b[2K\r");
+      if (!this.isClosed) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+      }
       this.originalLog(...args);
       if (!this.isClosed) {
         this.rl.prompt(true);

@@ -162,9 +162,12 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
         ? String(output.action.args.new_working_memory)
         : state.working_memory,
     pending:
-      output.action.tool === "respond_to_user" && result.ok && !output.pending_update
-        ? "" // Task complete after response
-        : output.pending_update ?? state.pending,
+      // Only clear pending if respond_to_user AND no pending_update specified
+      output.action.tool === "respond_to_user" && result.ok && output.pending_update === ""
+        ? MISSION // Return to mission after completing user task
+        : output.pending_update !== null
+        ? output.pending_update // Explicit update from LLM
+        : state.pending, // Keep current pending
     last_actions: [...state.last_actions, actionText].slice(-3),
     thought_history: [...state.thought_history, output.thought].slice(-5),
     chat_history:
@@ -236,18 +239,6 @@ async function tick(
   return null;
 }
 
-function logPlannedAction(tickNum: number, icon: string, output: LLMOutput) {
-  console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
-  console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
-  console.log(
-    `${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${
-      output.action.tool === "respond_to_user"
-        ? "respond_to_user( [hidden payload] )"
-        : `${output.action.tool}(${JSON.stringify(output.action.args)})`
-    }`
-  );
-}
-
 async function runPlannedAction(state: State, output: LLMOutput): Promise<ToolResult> {
   const actionText = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
   if ((state.last_actions.at(-1) || "").startsWith(`${actionText} -> fail:`)) {
@@ -287,7 +278,7 @@ async function main() {
   let state: State = {
     mission_progress: "",
     working_memory: "",
-    pending: "",
+    pending: MISSION, // Initialize with mission
     last_actions: [],
     thought_history: [],
     chat_history: [],
@@ -372,32 +363,56 @@ async function main() {
         running = false;
         input.close();
         clearInterval(timer);
+        tickInProgress = false;
         process.exit(0);
         return;
       }
 
       if (!hasInput && !hasPending) {
         idleTicks++;
-        if (idleTicks > MAX_IDLE_TICKS) return;
+        if (idleTicks > MAX_IDLE_TICKS) {
+          tickInProgress = false;
+          return;
+        }
       } else {
         idleTicks = 0;
       }
 
       const icon = hasInput ? "💬" : hasPending ? "⚙️" : "⏳";
+      
+      // Show tick started
+      console.log(chalk.cyan(`\n╭── Tick ${tickNum} ${icon} ──────────────────────────────────────`));
+      
       const output = await tick(state, messages, lastResult, lastActionName);
-      if (!output) return;
+      
+      if (!output) {
+        console.log(chalk.red(`${chalk.cyan("│")} ✖ Failed to get LLM response`));
+        console.log(chalk.cyan("╰──────────────────────────────────────────────────"));
+        tickInProgress = false;
+        return;
+      }
 
       lastActionName = output.action.tool;
 
       if (output.action.tool === "wait" || output.action.tool === "noop") {
-        input.setPromptStatus(chalk.dim(`[Tick ${tickNum}] ${icon} Standby...`));
+        console.log(`${chalk.cyan("│")} ${chalk.dim("💤 Waiting...")}`);
+        console.log(chalk.cyan("╰──────────────────────────────────────────────────"));
         state = updateState(state, output, { ok: true, data: null });
         lastResult = { ok: true, data: null };
+        tickInProgress = false;
         return;
       }
 
-      input.setPromptStatus(chalk.green(`[Tick ${tickNum}] ⚙ Active...`));
-      logPlannedAction(tickNum, icon, output);
+      // Show thought and action
+      console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
+      console.log(
+        `${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${
+          output.action.tool === "respond_to_user"
+            ? "respond_to_user( [hidden payload] )"
+            : `${output.action.tool}(${JSON.stringify(output.action.args)})`
+        }`
+      );
+      
       const toolResult = await runPlannedAction(state, output);
       state = updateState(state, output, toolResult);
       lastResult = toolResult;
@@ -414,13 +429,15 @@ async function main() {
       if (output.action.tool === "respond_to_user" && toolResult.ok && messages.length > 0) {
         await autoStoreMemory(state, messages.join(" "), String(output.action.args.text));
       }
+    } catch (error: any) {
+      console.error(chalk.red(`\n❌ Tick ${tickNum} failed: ${error.message}`));
     } finally {
       tickInProgress = false;
     }
   };
 
   const timer = setInterval(heartbeat, TICK_INTERVAL_MS);
-  await heartbeat();
+  // Don't call heartbeat() immediately - let the interval handle it
 }
 
 main().catch((err) => {
