@@ -17,6 +17,11 @@ const respond_to_user: ToolDef = {
     console.log(`\n${chalk.cyan("╭──────────────────────────────────────────────────")}`);
     console.log(`${chalk.cyan("│")} ${chalk.greenBright("🤖 AYA:")} ${chalk.whiteBright(text)}`);
     console.log(`${chalk.cyan("╰──────────────────────────────────────────────────")}`);
+    
+    // Send to web/mobile client
+    const { socketEvents } = await import("./main.js");
+    socketEvents.emit("chat_update", { role: "agent", content: text });
+
     return { ok: true, data: { delivered: true } };
   },
 };

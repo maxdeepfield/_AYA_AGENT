@@ -2,6 +2,8 @@ import "dotenv/config";
 import chalk from "chalk";
 import * as os from "node:os";
 import { Ollama } from "ollama";
+import { createServer } from "node:http";
+import { Server } from "socket.io";
 import { InputBuffer } from "./input.js";
 import { initMemory, searchEngrams, writeEngram, loadState, upsertState } from "./memory.js";
 import { executeTool, tools } from "./tools.js";
@@ -14,8 +16,18 @@ const TICK_INTERVAL_MS = Number.parseInt(process.env.TICK_INTERVAL || "5000", 10
 const MAX_IDLE_TICKS = Number.parseInt(process.env.MAX_IDLE || "999999", 10);
 const DIRECTIVES = process.env.DIRECTIVES || DEFAULT_DIRECTIVES;
 const MISSION = process.env.MISSION || DEFAULT_MISSION;
+const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
+const httpServer = createServer();
+const io = new Server(httpServer, {
+  cors: { origin: "*" },
+});
+
+// Global emitter for tools to access socket
+export const socketEvents = {
+  emit: (event: string, data: any) => io.emit(event, data),
+};
 
 function buildPrompt(
   state: State,
@@ -281,7 +293,32 @@ async function main() {
   console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit.\n"));
 
   input.on("input", (message: string) => {
-    console.log(`  📩 Buffered: "${message}"`);
+    console.log(`  📩 Buffered (Console): "${message}"`);
+    io.emit("chat_update", { role: "user", content: message });
+  });
+
+  io.on("connection", (socket) => {
+    console.log(chalk.blue(`📱 Client connected: ${socket.id}`));
+    
+    // Send current history to new client
+    socket.emit("sync_state", {
+      chat_history: state.chat_history,
+      mission_progress: state.mission_progress,
+      pending: state.pending
+    });
+
+    socket.on("message", (msg: string) => {
+      console.log(`  📩 Buffered (App): "${msg}"`);
+      input.push(msg); // Inject into agent's input queue
+    });
+
+    socket.on("disconnect", () => {
+      console.log(chalk.gray(`📱 Client disconnected: ${socket.id}`));
+    });
+  });
+
+  httpServer.listen(PORT, () => {
+    console.log(chalk.cyan(`📡 Socket server listening on port ${PORT}`));
   });
 
   input.on("close", () => {
