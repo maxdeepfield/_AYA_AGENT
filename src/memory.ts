@@ -20,34 +20,29 @@ export async function initMemory() {
     engramsCollection = client.db("aya_agent").collection("engrams");
     console.log(chalk.green("🧠 Subconscious Vector Memory connected (MongoDB)."));
 
-    try {
-      const indexes = await engramsCollection.listSearchIndexes().toArray();
-      if (!indexes.some((index: any) => index.name === "vector_index")) {
-        console.log(chalk.gray("⏳ Initializing Vector Search index for the first time..."));
-        await engramsCollection.createSearchIndex({
-          name: "vector_index",
-          definition: {
-            mappings: {
-              dynamic: true,
-              fields: {
-                embedding: {
-                  dimensions: 768,
-                  similarity: "cosine",
-                  type: "knnVector",
-                },
+    const indexes = await engramsCollection.listSearchIndexes().toArray();
+    if (!indexes.some((index: any) => index.name === "vector_index")) {
+      console.log(chalk.gray("⏳ Initializing Vector Search index..."));
+      await engramsCollection.createSearchIndex({
+        name: "vector_index",
+        definition: {
+          mappings: {
+            dynamic: true,
+            fields: {
+              embedding: {
+                dimensions: 768,
+                similarity: "cosine",
+                type: "knnVector",
               },
             },
           },
-        });
-        console.log(chalk.green("✨ Vector Search index 'vector_index' created successfully."));
-      }
-    } catch (e: any) {
-      console.log(chalk.yellow(`⚠️ Could not auto-create search index (Requires Atlas). Error: ${e.message}`));
+        },
+      });
+      console.log(chalk.green("✨ Vector Search index created."));
     }
   } catch (e: any) {
-    console.error(chalk.red(`❌ Failed to connect to MongoDB: ${e.message}`));
-    client = null;
-    engramsCollection = null;
+    console.error(chalk.red(`❌ Fatal Memory Error: ${e.message}`));
+    throw e; // Strict mode: fail if database is not compatible
   }
 }
 
@@ -122,4 +117,20 @@ export async function searchEngrams(
   } catch (e: any) {
     return { ok: false, error: e.message };
   }
+}
+
+export async function loadState(): Promise<any> {
+  if (!client) return null;
+  const db = client.db("aya_agent");
+  return await db.collection("agent_state").findOne({ id: "global_state" });
+}
+
+export async function upsertState(state: any): Promise<void> {
+  if (!client) return;
+  const db = client.db("aya_agent");
+  await db.collection("agent_state").updateOne(
+    { id: "global_state" },
+    { $set: { ...state, updatedAt: new Date() } },
+    { upsert: true }
+  );
 }

@@ -3,7 +3,7 @@ import chalk from "chalk";
 import * as os from "node:os";
 import { Ollama } from "ollama";
 import { InputBuffer } from "./input.js";
-import { initMemory, searchEngrams } from "./memory.js";
+import { initMemory, searchEngrams, writeEngram, loadState, upsertState } from "./memory.js";
 import { executeTool, tools } from "./tools.js";
 import { DEFAULT_DIRECTIVES, DEFAULT_MISSION, SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
 import type { LLMOutput, State, ToolResult } from "./types.js";
@@ -143,6 +143,19 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
   };
 }
 
+async function autoStoreMemory(state: State, userMsg: string, agentMsg: string) {
+  if (userMsg.length < 10 && agentMsg.length < 10) return;
+  
+  const text = `User: ${userMsg}\nAya: ${agentMsg}`;
+  const topic = "Recent Conversation";
+  
+  console.log(chalk.gray("  🧠 Archiving memory to subconscious..."));
+  const result = await writeEngram(topic, text);
+  if (!result.ok) {
+    console.error(chalk.red(`  ❌ Failed to archive memory: ${result.error}`));
+  }
+}
+
 async function tick(
   state: State,
   userMessages: string[],
@@ -236,6 +249,18 @@ async function main() {
     thought_history: [],
     chat_history: [],
   };
+  
+  const savedState = await loadState();
+  if (savedState) {
+    console.log(chalk.blue("💾 Restoring session state from database..."));
+    state = {
+      ...state,
+      mission_progress: savedState.mission_progress || "",
+      working_memory: savedState.working_memory || "",
+      pending: savedState.pending || "",
+      chat_history: savedState.chat_history || [],
+    };
+  }
 
   let tickNum = 0;
   let idleTicks = 0;
@@ -305,6 +330,18 @@ async function main() {
       state = updateState(state, output, toolResult);
       lastResult = toolResult;
       logToolResult(toolResult, output.pending_update);
+
+      // Persist state
+      await upsertState({
+        mission_progress: state.mission_progress,
+        working_memory: state.working_memory,
+        pending: state.pending,
+        chat_history: state.chat_history
+      });
+
+      if (output.action.tool === "respond_to_user" && toolResult.ok && messages.length > 0) {
+        await autoStoreMemory(state, messages.join(" "), String(output.action.args.text));
+      }
     } finally {
       tickInProgress = false;
     }
