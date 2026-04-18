@@ -15,6 +15,7 @@ AYA is a local AI agent that runs continuously, helping you with tasks through c
 - 💬 **Multi-Platform** — Console interface + React Native mobile app via Socket.IO
 - 🎯 **Context-Aware** — Maintains working memory, pending tasks, and conversation history
 - 🛡️ **Anti-Spam Guards** — Prevents repetitive actions (duplicate consolidations, repeated searches)
+- 📝 **Session Logging** — Every run logged to separate file for behavior analysis
 
 ### Agent Tools
 
@@ -290,6 +291,7 @@ MISSION="Monitor system logs and alert on errors"
 - [Ask User Feature](docs/ask_user_feature.md) — Question/answer flow
 - [Scheduled Tasks](docs/scheduled_tasks.md) — Recurring task system
 - [Anti-Spam Guards](docs/anti_spam_guards.md) — Protection against repetitive behavior
+- [Logging System](docs/logging.md) — Session logs for behavior analysis
 
 ---
 

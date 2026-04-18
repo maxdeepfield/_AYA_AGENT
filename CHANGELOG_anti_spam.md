@@ -128,6 +128,28 @@ Expected behavior improvements:
 - Prevents agent from asking multiple questions without waiting
 - Updated `docs/ask_user_feature.md` with blocking behavior documentation
 
+### Web Research Workflow (2026-04-18 Update 2)
+- **Problem**: Agent was doing multiple `web_search` but never using `fetch_url` to read full content
+- **Solution**: Added "WEB RESEARCH WORKFLOW" section to prompts
+- Updated tool descriptions:
+  - `web_search`: Now explicitly says "Returns SHORT SNIPPET (not full content). Use fetch_url after"
+  - `fetch_url`: Now says "Fetch FULL content (use after web_search)"
+- Added shallow research warning: alerts when multiple searches without fetches
+- Proper workflow: `web_search` → get links → `fetch_url(best_link)` → read full article
+
+### Session Logging (2026-04-18 Update 3)
+- **Feature**: Every agent run now creates a separate log file with timestamp
+- **Location**: `logs/run_<ISO_TIMESTAMP>.log`
+- **Content**: All console output with timestamps, ANSI codes stripped
+- **Benefits**: Analyze agent behavior, debug issues, compare runs
+- **Implementation**:
+  - Override `console.log` to write to both console and file
+  - Create `logs/` directory automatically
+  - Close log stream on exit (Ctrl+C or 'exit' command)
+  - Show log filename in startup banner
+  - Added `logs/` to `.gitignore`
+- **Documentation**: Created `docs/logging.md` with usage examples
+
 ## Notes
 
 - Guards return `ToolResult` with `ok: false` and descriptive error messages

@@ -1,6 +1,8 @@
 import "dotenv/config";
 import chalk from "chalk";
 import * as os from "node:os";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Ollama } from "ollama";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
@@ -17,6 +19,39 @@ const MAX_IDLE_TICKS = Number.parseInt(process.env.MAX_IDLE || "999999", 10);
 const DIRECTIVES = process.env.DIRECTIVES || DEFAULT_DIRECTIVES;
 const MISSION = process.env.MISSION || DEFAULT_MISSION;
 const PORT = Number.parseInt(process.env.PORT || "3000", 10);
+
+// Setup logging
+const LOGS_DIR = path.join(process.cwd(), "logs");
+const LOG_FILE = path.join(LOGS_DIR, `run_${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+
+// Ensure logs directory exists
+if (!fs.existsSync(LOGS_DIR)) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+
+// Create log stream
+const logStream = fs.createWriteStream(LOG_FILE, { flags: "a" });
+
+// Log function that writes to both console and file
+function log(message: string, skipConsole = false) {
+  const timestamp = new Date().toISOString();
+  const logLine = `[${timestamp}] ${message}\n`;
+  logStream.write(logLine);
+  if (!skipConsole) {
+    // Strip ANSI codes for file, keep for console
+    process.stdout.write(message + "\n");
+  }
+}
+
+// Override console.log to also write to file
+const originalConsoleLog = console.log;
+console.log = (...args: any[]) => {
+  const message = args.map(arg => typeof arg === "string" ? arg : JSON.stringify(arg)).join(" ");
+  // Remove ANSI color codes for file logging
+  const cleanMessage = message.replace(/\x1b\[[0-9;]*m/g, "");
+  logStream.write(`[${new Date().toISOString()}] ${cleanMessage}\n`);
+  originalConsoleLog(...args);
+};
 
 const ollama = new Ollama({ host: OLLAMA_HOST });
 const httpServer = createServer();
@@ -267,6 +302,25 @@ async function runPlannedAction(state: State, output: LLMOutput): Promise<ToolRe
     console.log(chalk.yellow(`  ⚠️  WARNING: ${recentFailures} recent failures. Consider asking user for help or trying different approach.`));
   }
   
+  // Guard: Warn if too many research actions without user interaction
+  const recentResearch = state.last_actions.filter(a => 
+    a.includes("web_search") || a.includes("fetch_url") || a.includes("write_engram")
+  ).length;
+  if (recentResearch >= 2 && !output.action.tool.includes("respond_to_user") && !output.action.tool.includes("consolidate_thoughts")) {
+    console.log(chalk.yellow(`  ⚠️  WARNING: ${recentResearch} consecutive research actions. Consider consolidating or reporting to user.`));
+  }
+  
+  // Guard: Warn if web_search without fetch_url (shallow research)
+  if (output.action.tool === "web_search") {
+    const recentActions = state.last_actions.slice(-5);
+    const hasRecentSearch = recentActions.some(a => a.includes("web_search"));
+    const hasRecentFetch = recentActions.some(a => a.includes("fetch_url"));
+    
+    if (hasRecentSearch && !hasRecentFetch) {
+      console.log(chalk.yellow(`  ⚠️  WARNING: Multiple web_search without fetch_url. Snippets are too short - fetch full content!`));
+    }
+  }
+  
   // Guard: Don't consolidate with the same or very similar content
   if (output.action.tool === "consolidate_thoughts") {
     const newMemory = String(output.action.args.new_working_memory || "").trim();
@@ -392,6 +446,7 @@ async function main() {
   console.log(`${chalk.green("●")} System Online`);
   console.log(`${chalk.blue("⚙")} Model: ${chalk.whiteBright(MODEL)}`);
   console.log(`${chalk.blue("⏱")} Interval: ${chalk.whiteBright(TICK_INTERVAL_MS)}ms`);
+  console.log(`${chalk.blue("📝")} Log: ${chalk.whiteBright(path.basename(LOG_FILE))}`);
   console.log(chalk.gray("  Interactive mode enabled. Type queries or 'exit' to quit."));
   console.log(chalk.cyan("══════════════════════════════════════════════════════════\n"));
 
@@ -459,8 +514,10 @@ async function main() {
 
       if (messages.some((message) => /^(exit|quit)$/i.test(message))) {
         console.log("\n👋 Goodbye.\n");
+        console.log(chalk.gray(`📝 Session log saved to: ${LOG_FILE}`));
         running = false;
         input.close();
+        logStream.end();
         clearInterval(timer);
         tickInProgress = false;
         process.exit(0);
@@ -534,10 +591,21 @@ async function main() {
   };
 
   const timer = setInterval(heartbeat, TICK_INTERVAL_MS);
+  
+  // Handle graceful shutdown
+  process.on("SIGINT", () => {
+    console.log("\n\n👋 Exiting (Ctrl+C)...");
+    console.log(chalk.gray(`📝 Session log saved to: ${LOG_FILE}`));
+    logStream.end();
+    clearInterval(timer);
+    process.exit(0);
+  });
+  
   // Don't call heartbeat() immediately - let the interval handle it
 }
 
 main().catch((err) => {
   console.error("Fatal:", err.message);
+  logStream.end();
   process.exit(1);
 });

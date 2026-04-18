@@ -91,7 +91,7 @@ const write_file: ToolDef = {
 };
 
 const web_search: ToolDef = {
-  description: "Search the web using Serper API. Args: { query: string }",
+  description: "Search the web using Serper API. Returns title, link, and SHORT SNIPPET (not full content). Use fetch_url after to read full pages. Args: { query: string }",
   async execute(args): Promise<ToolResult> {
     const query = args.query as string;
     const apiKey = process.env.SERPER_API_KEY;
@@ -252,7 +252,7 @@ export const tools: ToolRegistry = {
   web_search,
   run_command,
   fetch_url: {
-    description: "Read the text content of a URL. Args: { url: string }",
+    description: "Fetch and read FULL content from a URL (use after web_search to read complete articles). Strips HTML and returns text. Args: { url: string }",
     async execute(args): Promise<ToolResult> {
       const url = args.url as string;
       if (!url) return { ok: false, data: null, error: "Missing 'url'" };

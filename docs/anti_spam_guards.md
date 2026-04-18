@@ -24,7 +24,31 @@ The agent has built-in guards to prevent repetitive and spammy behavior. These g
 
 **Note**: This is a soft warning, not a hard block. Agent sees it and should react accordingly.
 
-### 3. Consolidate Thoughts Guard
+### 3. Shallow Research Warning
+**Purpose**: Alert agent when doing multiple web searches without reading full content.
+
+**Behavior**:
+- Checks if agent did `web_search` in last 5 actions
+- Checks if agent did `fetch_url` in last 5 actions
+- If multiple searches but no fetches, shows warning
+
+**Warning Message**: `"⚠️  WARNING: Multiple web_search without fetch_url. Snippets are too short - fetch full content!"`
+
+**Note**: Soft warning. Encourages proper research workflow: search → fetch → read.
+
+### 4. Research Spam Warning
+**Purpose**: Alert agent when doing too many consecutive research actions without user interaction.
+
+**Behavior**:
+- Counts `web_search`, `fetch_url`, `write_engram` in last 3 actions
+- If ≥2 research actions and next action is also research (not respond/consolidate), shows warning
+- Encourages agent to report findings or consolidate before continuing
+
+**Warning Message**: `"⚠️  WARNING: N consecutive research actions. Consider consolidating or reporting to user."`
+
+**Note**: Prevents research spam loops. Agent should periodically report to user or consolidate thoughts.
+
+### 5. Consolidate Thoughts Guard
 **Purpose**: Prevent repeating the exact same action that just failed.
 
 **Behavior**: If the last action in `state.last_actions` is the same tool call with same arguments and it failed, the guard blocks it.
@@ -47,7 +71,7 @@ The agent has built-in guards to prevent repetitive and spammy behavior. These g
 similarity = |words1 ∩ words2| / |words1 ∪ words2|
 ```
 
-### 4. Web Search Guard
+### 5. Web Search Guard
 **Purpose**: Prevent repeating the same web search query within recent actions.
 
 **Behavior**: Checks last 3 actions for `web_search` calls. If the same query (case-insensitive) was already used, blocks it.
@@ -121,6 +145,20 @@ Tick 3: web_search("AI research") ✅ ALLOWED (different action)
 ```
 Tick 1: run_command("bad_cmd") → fail
 Tick 2: ask_user("The command failed. What should I do?") ✅ ALLOWED (seeking help)
+```
+
+### Scenario 7: Shallow Research
+```
+Tick 1: web_search("AI agents") → ok (gets snippets)
+Tick 2: web_search("self-evolving AI") → ok (gets snippets)
+Tick 3: web_search("autonomous agents") ⚠️ WARNING (multiple searches, no fetch)
+```
+
+### Scenario 8: Proper Research
+```
+Tick 1: web_search("AI agents") → ok (gets links)
+Tick 2: fetch_url("https://example.com/article") → ok (reads full content)
+Tick 3: web_search("another topic") ✅ ALLOWED (proper workflow)
 ```
 
 ## Future Improvements
