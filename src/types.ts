@@ -6,6 +6,15 @@ export interface State {
   thought_history: string[];
   chat_history: { role: string; content: string }[];
   awaiting_answer: { question: string; asked_at: number } | null;
+  scheduled_tasks: ScheduledTask[];
+}
+
+export interface ScheduledTask {
+  id: string;
+  task: string;
+  interval_minutes: number;
+  last_executed: number;
+  next_execution: number;
 }
 
 export interface ToolResult {

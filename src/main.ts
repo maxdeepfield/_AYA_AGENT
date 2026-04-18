@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { Server } from "socket.io";
 import { InputBuffer } from "./input.js";
 import { initMemory, searchEngrams, writeEngram, loadState, upsertState } from "./memory.js";
-import { executeTool, tools } from "./tools.js";
+import { executeTool, tools, setScheduledTasksRef } from "./tools.js";
 import { DEFAULT_DIRECTIVES, DEFAULT_MISSION, SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
 import type { LLMOutput, State, ToolResult } from "./types.js";
 
@@ -58,6 +58,7 @@ function buildPrompt(
 
   return SYSTEM_PROMPT_TEMPLATE
     .replace("{DIRECTIVES}", DIRECTIVES)
+    .replace("{MISSION}", MISSION)
     .replace("{mission_progress}", state.mission_progress || "none")
     .replace("{working_memory}", state.working_memory || "empty")
     .replace("{pending}", state.pending || "nothing pending")
@@ -162,12 +163,12 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
         ? String(output.action.args.new_working_memory)
         : state.working_memory,
     pending:
-      // Only clear pending if respond_to_user AND no pending_update specified
-      output.action.tool === "respond_to_user" && result.ok && output.pending_update === ""
-        ? MISSION // Return to mission after completing user task
+      // Clear pending after successful respond_to_user if no explicit pending_update
+      output.action.tool === "respond_to_user" && result.ok && output.pending_update === null
+        ? MISSION
         : output.pending_update !== null
-        ? output.pending_update // Explicit update from LLM
-        : state.pending, // Keep current pending
+        ? output.pending_update
+        : state.pending,
     last_actions: [...state.last_actions, actionText].slice(-3),
     thought_history: [...state.thought_history, output.thought].slice(-5),
     chat_history:
@@ -177,6 +178,7 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
         ? [...state.chat_history, { role: "agent", content: String(output.action.args.question) }].slice(-10)
         : state.chat_history.slice(-10),
     awaiting_answer: awaitingAnswer,
+    scheduled_tasks: state.scheduled_tasks,
   };
 }
 
@@ -224,7 +226,15 @@ async function tick(
     }
   } else {
     if (!state.pending) state.pending = MISSION;
-    situation += `\nNo new user messages.\n${state.pending === MISSION ? "Mission activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
+    
+    // Check if this is a scheduled task
+    const isScheduledTask = state.scheduled_tasks.some(t => t.task === state.pending);
+    
+    if (isScheduledTask) {
+      situation += `\n⚠️ SCHEDULED TASK TRIGGERED!\nYou MUST execute this task now:\n  - ${state.pending}`;
+    } else {
+      situation += `\nNo new user messages.\n${state.pending === MISSION ? "Mission activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
+    }
   }
 
   const prompt = buildPrompt(state, situation, lastResult, lastActionName);
@@ -241,12 +251,26 @@ async function tick(
 
 async function runPlannedAction(state: State, output: LLMOutput): Promise<ToolResult> {
   const actionText = `${output.action.tool}(${JSON.stringify(output.action.args)})`;
+  
+  // Guard: Don't repeat the exact same failed action
   if ((state.last_actions.at(-1) || "").startsWith(`${actionText} -> fail:`)) {
     return {
       ok: false,
       data: null,
       error: "SYSTEM GUARD: You repeated the exact same failed action. Try a different approach.",
     };
+  }
+  
+  // Guard: Don't consolidate with the same content
+  if (output.action.tool === "consolidate_thoughts") {
+    const newMemory = String(output.action.args.new_working_memory || "");
+    if (newMemory === state.working_memory) {
+      return {
+        ok: false,
+        data: null,
+        error: "SYSTEM GUARD: You're trying to consolidate with the exact same content. Memory is already consolidated.",
+      };
+    }
   }
 
   return executeTool(output.action.tool, output.action.args, tools);
@@ -278,12 +302,15 @@ async function main() {
   let state: State = {
     mission_progress: "",
     working_memory: "",
-    pending: MISSION, // Initialize with mission
+    pending: MISSION,
     last_actions: [],
     thought_history: [],
     chat_history: [],
     awaiting_answer: null,
+    scheduled_tasks: [],
   };
+  
+  setScheduledTasksRef(state.scheduled_tasks);
   
   const savedState = await loadState();
   if (savedState) {
@@ -292,10 +319,12 @@ async function main() {
       ...state,
       mission_progress: savedState.mission_progress || "",
       working_memory: savedState.working_memory || "",
-      pending: savedState.pending || "",
+      pending: savedState.pending || MISSION,
       chat_history: savedState.chat_history || [],
-      awaiting_answer: null, // Don't restore awaiting_answer across restarts
+      awaiting_answer: null,
+      scheduled_tasks: savedState.scheduled_tasks || [],
     };
+    setScheduledTasksRef(state.scheduled_tasks);
   }
 
   let tickNum = 0;
@@ -356,6 +385,24 @@ async function main() {
       tickNum++;
       const messages = input.drain();
       const hasInput = messages.length > 0;
+      
+      // Check scheduled tasks BEFORE checking hasPending
+      const now = Date.now();
+      for (const task of state.scheduled_tasks) {
+        if (now >= task.next_execution) {
+          // Add task to pending if not busy
+          if (!state.pending || state.pending === MISSION) {
+            state.pending = task.task;
+            console.log(chalk.yellow(`  ⏰ Scheduled task triggered: ${task.task}`));
+          }
+          
+          // Update next execution
+          task.last_executed = now;
+          task.next_execution = now + task.interval_minutes * 60 * 1000;
+        }
+      }
+      
+      // Calculate hasPending AFTER scheduled tasks check
       const hasPending = Boolean(state.pending || state.awaiting_answer);
 
       if (messages.some((message) => /^(exit|quit)$/i.test(message))) {
@@ -394,16 +441,7 @@ async function main() {
 
       lastActionName = output.action.tool;
 
-      if (output.action.tool === "wait" || output.action.tool === "noop") {
-        console.log(`${chalk.cyan("│")} ${chalk.dim("💤 Waiting...")}`);
-        console.log(chalk.cyan("╰──────────────────────────────────────────────────"));
-        state = updateState(state, output, { ok: true, data: null });
-        lastResult = { ok: true, data: null };
-        tickInProgress = false;
-        return;
-      }
-
-      // Show thought and action
+      // Log thought and action
       console.log(`${chalk.cyan("│")} ${chalk.magenta("💭 Thought:")} ${chalk.italic(output.thought)}`);
       console.log(
         `${chalk.cyan("│")} ${chalk.yellow("🔧 Action:")}  ${
@@ -423,7 +461,8 @@ async function main() {
         mission_progress: state.mission_progress,
         working_memory: state.working_memory,
         pending: state.pending,
-        chat_history: state.chat_history
+        chat_history: state.chat_history,
+        scheduled_tasks: state.scheduled_tasks,
       });
 
       if (output.action.tool === "respond_to_user" && toolResult.ok && messages.length > 0) {

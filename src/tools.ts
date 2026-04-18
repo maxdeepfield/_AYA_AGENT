@@ -8,6 +8,13 @@ import type { ToolDef, ToolRegistry, ToolResult } from "./types.js";
 
 const execAsync = promisify(exec);
 
+// Global scheduled tasks storage (will be passed from main)
+let scheduledTasksRef: any = null;
+
+export function setScheduledTasksRef(ref: any) {
+  scheduledTasksRef = ref;
+}
+
 const respond_to_user: ToolDef = {
   description: "Send a message to the user. Args: { text: string }",
   async execute(args): Promise<ToolResult> {
@@ -162,6 +169,84 @@ const run_command: ToolDef = {
 export const tools: ToolRegistry = {
   respond_to_user,
   ask_user,
+  schedule_task: {
+    description: "Schedule a recurring task. Args: { task: string, interval_minutes: number }. Example: schedule_task({ task: 'fetch news', interval_minutes: 10 })",
+    async execute(args): Promise<ToolResult> {
+      const task = args.task as string;
+      const interval = args.interval_minutes as number;
+      
+      if (!task || !interval) {
+        return { ok: false, data: null, error: "Missing 'task' or 'interval_minutes'" };
+      }
+      
+      if (!scheduledTasksRef) {
+        return { ok: false, data: null, error: "Scheduled tasks not initialized" };
+      }
+      
+      const taskId = `task_${Date.now()}`;
+      const now = Date.now();
+      
+      scheduledTasksRef.push({
+        id: taskId,
+        task,
+        interval_minutes: interval,
+        last_executed: 0,
+        next_execution: now + interval * 60 * 1000,
+      });
+      
+      return {
+        ok: true,
+        data: {
+          task_id: taskId,
+          task,
+          interval_minutes: interval,
+          next_execution: new Date(now + interval * 60 * 1000).toISOString(),
+        },
+      };
+    },
+  },
+  list_scheduled_tasks: {
+    description: "List all scheduled recurring tasks",
+    async execute(): Promise<ToolResult> {
+      if (!scheduledTasksRef) {
+        return { ok: false, data: null, error: "Scheduled tasks not initialized" };
+      }
+      
+      return {
+        ok: true,
+        data: {
+          tasks: scheduledTasksRef.map((t: any) => ({
+            id: t.id,
+            task: t.task,
+            interval_minutes: t.interval_minutes,
+            next_execution: new Date(t.next_execution).toISOString(),
+          })),
+        },
+      };
+    },
+  },
+  cancel_scheduled_task: {
+    description: "Cancel a scheduled task. Args: { task_id: string }",
+    async execute(args): Promise<ToolResult> {
+      const taskId = args.task_id as string;
+      
+      if (!taskId) {
+        return { ok: false, data: null, error: "Missing 'task_id'" };
+      }
+      
+      if (!scheduledTasksRef) {
+        return { ok: false, data: null, error: "Scheduled tasks not initialized" };
+      }
+      
+      const index = scheduledTasksRef.findIndex((t: any) => t.id === taskId);
+      if (index === -1) {
+        return { ok: false, data: null, error: `Task ${taskId} not found` };
+      }
+      
+      const removed = scheduledTasksRef.splice(index, 1)[0];
+      return { ok: true, data: { cancelled: removed } };
+    },
+  },
   read_file,
   write_file,
   web_search,
@@ -238,13 +323,9 @@ export async function executeTool(
   args: Record<string, unknown>,
   registry: ToolRegistry
 ): Promise<ToolResult> {
-  if (name === "noop") {
-    return { ok: true, data: { noop: true } };
-  }
-
   const tool = registry[name];
   if (!tool) {
-    return { ok: false, data: null, error: `Unknown tool: ${name}` };
+    return { ok: false, data: null, error: `Unknown tool: ${name}. Available tools: ${Object.keys(registry).join(", ")}` };
   }
 
   try {
