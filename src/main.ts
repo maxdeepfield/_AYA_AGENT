@@ -261,19 +261,71 @@ async function runPlannedAction(state: State, output: LLMOutput): Promise<ToolRe
     };
   }
   
-  // Guard: Don't consolidate with the same content
+  // Guard: Warn if multiple consecutive failures (but allow the attempt)
+  const recentFailures = state.last_actions.filter(a => a.includes("-> fail:")).length;
+  if (recentFailures >= 2 && !output.action.tool.includes("ask_user")) {
+    console.log(chalk.yellow(`  ⚠️  WARNING: ${recentFailures} recent failures. Consider asking user for help or trying different approach.`));
+  }
+  
+  // Guard: Don't consolidate with the same or very similar content
   if (output.action.tool === "consolidate_thoughts") {
-    const newMemory = String(output.action.args.new_working_memory || "");
-    if (newMemory === state.working_memory) {
+    const newMemory = String(output.action.args.new_working_memory || "").trim();
+    const currentMemory = (state.working_memory || "").trim();
+    
+    // Exact match
+    if (newMemory === currentMemory) {
       return {
         ok: false,
         data: null,
-        error: "SYSTEM GUARD: You're trying to consolidate with the exact same content. Memory is already consolidated.",
+        error: "SYSTEM GUARD: You're trying to consolidate with the exact same content. Memory is already consolidated. Try clearing it with empty string or do something else.",
+      };
+    }
+    
+    // Very similar (>90% overlap)
+    if (newMemory.length > 20 && currentMemory.length > 20) {
+      const similarity = calculateSimilarity(newMemory, currentMemory);
+      if (similarity > 0.9) {
+        return {
+          ok: false,
+          data: null,
+          error: `SYSTEM GUARD: New memory is ${Math.round(similarity * 100)}% similar to current memory. Don't spam consolidation. Try a different action or clear memory with empty string.`,
+        };
+      }
+    }
+  }
+  
+  // Guard: Don't repeat the same web_search query within last 3 actions
+  if (output.action.tool === "web_search") {
+    const query = String(output.action.args.query || "").toLowerCase().trim();
+    const recentSearches = state.last_actions
+      .filter(a => a.includes("web_search"))
+      .map(a => {
+        const match = a.match(/web_search\(\{"query":"([^"]+)"\}/);
+        return match ? match[1].toLowerCase().trim() : "";
+      })
+      .filter(Boolean);
+    
+    if (recentSearches.includes(query)) {
+      return {
+        ok: false,
+        data: null,
+        error: `SYSTEM GUARD: You already searched for "${query}" recently. Try a different query or use a different tool.`,
       };
     }
   }
 
   return executeTool(output.action.tool, output.action.args, tools);
+}
+
+// Simple similarity calculation (Jaccard similarity on words)
+function calculateSimilarity(str1: string, str2: string): number {
+  const words1 = new Set(str1.toLowerCase().split(/\s+/));
+  const words2 = new Set(str2.toLowerCase().split(/\s+/));
+  
+  const intersection = new Set([...words1].filter(w => words2.has(w)));
+  const union = new Set([...words1, ...words2]);
+  
+  return intersection.size / union.size;
 }
 
 function logToolResult(result: ToolResult, pendingUpdate: string | null) {
@@ -423,6 +475,12 @@ async function main() {
         }
       } else {
         idleTicks = 0;
+      }
+      
+      // If awaiting answer and no user input, skip this tick
+      if (state.awaiting_answer && !hasInput) {
+        tickInProgress = false;
+        return;
       }
 
       const icon = hasInput ? "💬" : hasPending ? "⚙️" : "⏳";

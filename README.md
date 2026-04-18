@@ -14,6 +14,7 @@ AYA is a local AI agent that runs continuously, helping you with tasks through c
 - ⏰ **Scheduled Tasks** — Set recurring tasks (e.g., "give me news every 10 minutes")
 - 💬 **Multi-Platform** — Console interface + React Native mobile app via Socket.IO
 - 🎯 **Context-Aware** — Maintains working memory, pending tasks, and conversation history
+- 🛡️ **Anti-Spam Guards** — Prevents repetitive actions (duplicate consolidations, repeated searches)
 
 ### Agent Tools
 
@@ -288,6 +289,7 @@ MISSION="Monitor system logs and alert on errors"
 
 - [Ask User Feature](docs/ask_user_feature.md) — Question/answer flow
 - [Scheduled Tasks](docs/scheduled_tasks.md) — Recurring task system
+- [Anti-Spam Guards](docs/anti_spam_guards.md) — Protection against repetitive behavior
 
 ---
 
@@ -297,6 +299,16 @@ MISSION="Monitor system logs and alert on errors"
 
 **Cause:** Pending state not cleared after `respond_to_user`  
 **Fix:** Agent should set `pending_update: null` or `""` in response
+
+### Agent spams consolidate_thoughts
+
+**Cause:** Trying to consolidate with same/similar content repeatedly  
+**Fix:** Anti-spam guards will block this. Agent should try different actions (web_search, read_file) or clear memory with empty string
+
+### Agent repeats same web search
+
+**Cause:** Same query used multiple times in recent actions  
+**Fix:** Anti-spam guard blocks duplicate searches. Agent should try different queries or tools
 
 ### MongoDB connection fails
 
