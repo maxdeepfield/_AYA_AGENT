@@ -16,9 +16,10 @@ const MODEL = process.env.OLLAMA_MODEL || "Bored/gigachat3-10B-A1.8:latest";
 const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
 const TICK_INTERVAL_MS = Number.parseInt(process.env.TICK_INTERVAL || "5000", 10);
 const MAX_IDLE_TICKS = Number.parseInt(process.env.MAX_IDLE || "999999", 10);
+const RESTORED_PENDING_TTL_MINUTES = Number.parseInt(process.env.RESTORED_PENDING_TTL_MINUTES || "90", 10);
 const DIRECTIVES = process.env.DIRECTIVES || DEFAULT_DIRECTIVES;
 const MISSION = process.env.MISSION || DEFAULT_MISSION;
-const PORT = Number.parseInt(process.env.PORT || "3000", 10);
+const PORT = Number.parseInt(process.env.PORT || "3001", 10);
 
 // Setup logging
 const LOGS_DIR = path.join(process.cwd(), "logs");
@@ -64,6 +65,20 @@ export const socketEvents = {
   emit: (event: string, data: any) => io.emit(event, data),
 };
 
+function shouldDropRestoredPending(savedState: any): boolean {
+  const pending = String(savedState?.pending || "").trim();
+  if (!pending) return false;
+
+  const updatedAt = savedState?.updatedAt ? new Date(savedState.updatedAt).getTime() : Number.NaN;
+  if (Number.isNaN(updatedAt)) return false;
+
+  const ageMs = Date.now() - updatedAt;
+  const ttlMs = RESTORED_PENDING_TTL_MINUTES * 60 * 1000;
+  const lastChatRole = savedState?.chat_history?.at?.(-1)?.role;
+
+  return ageMs > ttlMs && lastChatRole !== "user";
+}
+
 function buildPrompt(
   state: State,
   situation: string,
@@ -78,6 +93,8 @@ function buildPrompt(
     lastResult && lastAction
       ? lastAction === "noop"
         ? "\nLast action: noop (did nothing)"
+        : lastAction === "wait"
+        ? `\nLast action: wait\nResult: ${String(JSON.stringify(lastResult.data) ?? lastResult.data).slice(0, 800)}`
         : `\nLast action: ${lastAction}\nResult: ${String(JSON.stringify(lastResult.data) ?? lastResult.data).slice(0, 800)}`
       : "";
 
@@ -198,11 +215,10 @@ function updateState(state: State, output: LLMOutput, result: ToolResult): State
         ? String(output.action.args.new_working_memory)
         : state.working_memory,
     pending:
-      // Clear pending after successful respond_to_user if no explicit pending_update
-      output.action.tool === "respond_to_user" && result.ok && output.pending_update === null
-        ? MISSION
-        : output.pending_update !== null
+      output.pending_update !== null
         ? output.pending_update
+        : (output.action.tool === "respond_to_user" || output.action.tool === "wait") && result.ok
+        ? ""
         : state.pending,
     last_actions: [...state.last_actions, actionText].slice(-3),
     thought_history: [...state.thought_history, output.thought].slice(-5),
@@ -260,15 +276,17 @@ async function tick(
       }
     }
   } else {
-    if (!state.pending) state.pending = MISSION;
-    
-    // Check if this is a scheduled task
-    const isScheduledTask = state.scheduled_tasks.some(t => t.task === state.pending);
-    
-    if (isScheduledTask) {
-      situation += `\n⚠️ SCHEDULED TASK TRIGGERED!\nYou MUST execute this task now:\n  - ${state.pending}`;
+    if (!state.pending) {
+      situation +=
+        "\nNo new user messages.\nQuiet interval. There is no active pending task. Prefer wait unless there is one small genuinely meaningful move.";
     } else {
-      situation += `\nNo new user messages.\n${state.pending === MISSION ? "Mission activated:" : "Continuing current pending task:"}\n  - ${state.pending}`;
+      const isScheduledTask = state.scheduled_tasks.some((t) => t.task === state.pending);
+
+      if (isScheduledTask) {
+        situation += `\n⚠️ SCHEDULED TASK TRIGGERED!\nYou MUST execute this task now:\n  - ${state.pending}`;
+      } else {
+        situation += `\nNo new user messages.\nContinuing current pending task:\n  - ${state.pending}`;
+      }
     }
   }
 
@@ -408,7 +426,7 @@ async function main() {
   let state: State = {
     mission_progress: "",
     working_memory: "",
-    pending: MISSION,
+    pending: "",
     last_actions: [],
     thought_history: [],
     chat_history: [],
@@ -421,11 +439,21 @@ async function main() {
   const savedState = await loadState();
   if (savedState) {
     console.log(chalk.blue("💾 Restoring session state from database..."));
+    const dropRestoredPending = shouldDropRestoredPending(savedState);
+
+    if (dropRestoredPending) {
+      console.log(
+        chalk.gray(
+          `🧹 Dropping stale pending task older than ${RESTORED_PENDING_TTL_MINUTES} minutes: ${savedState.pending}`
+        )
+      );
+    }
+
     state = {
       ...state,
       mission_progress: savedState.mission_progress || "",
       working_memory: savedState.working_memory || "",
-      pending: savedState.pending || MISSION,
+      pending: dropRestoredPending ? "" : savedState.pending || "",
       chat_history: savedState.chat_history || [],
       awaiting_answer: null,
       scheduled_tasks: savedState.scheduled_tasks || [],
@@ -498,7 +526,7 @@ async function main() {
       for (const task of state.scheduled_tasks) {
         if (now >= task.next_execution) {
           // Add task to pending if not busy
-          if (!state.pending || state.pending === MISSION) {
+          if (!state.pending) {
             state.pending = task.task;
             console.log(chalk.yellow(`  ⏰ Scheduled task triggered: ${task.task}`));
           }
@@ -530,9 +558,12 @@ async function main() {
           tickInProgress = false;
           return;
         }
-      } else {
-        idleTicks = 0;
+
+        tickInProgress = false;
+        return;
       }
+
+      idleTicks = 0;
       
       // If awaiting answer and no user input, skip this tick
       if (state.awaiting_answer && !hasInput) {

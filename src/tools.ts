@@ -58,6 +58,45 @@ const ask_user: ToolDef = {
   },
 };
 
+const wait: ToolDef = {
+  description: "Intentionally stay quiet until the next tick. Use when silence is appropriate or there is no meaningful action right now. Args: { reason?: string }",
+  async execute(args): Promise<ToolResult> {
+    const reason = typeof args.reason === "string" ? args.reason : "";
+    return {
+      ok: true,
+      data: {
+        waited: true,
+        reason,
+      },
+    };
+  },
+};
+
+const list_directory: ToolDef = {
+  description: "List files and directories. Use this to map the local environment. Args: { path?: string }",
+  async execute(args): Promise<ToolResult> {
+    const targetPath = typeof args.path === "string" && args.path.trim() ? args.path : ".";
+
+    try {
+      const entries = await fs.readdir(targetPath, { withFileTypes: true });
+      return {
+        ok: true,
+        data: {
+          path: targetPath,
+          entries: entries
+            .slice(0, 200)
+            .map((entry) => ({
+              name: entry.name,
+              type: entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other",
+            })),
+        },
+      };
+    } catch (e: any) {
+      return { ok: false, data: null, error: e.message };
+    }
+  },
+};
+
 const read_file: ToolDef = {
   description: "Read contents of a file. Args: { path: string }",
   async execute(args): Promise<ToolResult> {
@@ -169,6 +208,8 @@ const run_command: ToolDef = {
 export const tools: ToolRegistry = {
   respond_to_user,
   ask_user,
+  wait,
+  list_directory,
   schedule_task: {
     description: "Schedule a recurring task. Args: { task: string, interval_minutes: number }. Example: schedule_task({ task: 'fetch news', interval_minutes: 10 })",
     async execute(args): Promise<ToolResult> {

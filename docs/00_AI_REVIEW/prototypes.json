@@ -1,0 +1,110 @@
+[
+    {
+        "name":  "afguard-typescript",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\afguard-typescript",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  true,
+        "readme":  "README.md",
+        "note":  "TypeScript project with docs and src; likely more structured than purely experimental notes."
+    },
+    {
+        "name":  "agi-mvp-agent",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\agi-mvp-agent",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  false,
+        "readme":  null,
+        "note":  "MVP agent project; likely useful as a minimal code baseline."
+    },
+    {
+        "name":  "ai-agent-simple",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\ai-agent-simple",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  false,
+        "readme":  "README.md",
+        "note":  "Simple agent variant; likely a good low-complexity comparison point."
+    },
+    {
+        "name":  "ai-framing",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\ai-framing",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  false,
+        "readme":  null,
+        "note":  "Looks like a framing-focused agent experiment with logs and tests."
+    },
+    {
+        "name":  "ai-pc-agent",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\ai-pc-agent",
+        "hasPackageJson":  false,
+        "hasSrc":  false,
+        "hasDocs":  false,
+        "readme":  null,
+        "note":  "Container folder for several desktop-agent variants."
+    },
+    {
+        "name":  "aya-one",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\aya-one",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  true,
+        "readme":  "README.md",
+        "note":  "Current main experiment; includes logs, postmortem, and new prototype docs."
+    },
+    {
+        "name":  "she-is-not-alone-antigravity",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\she-is-not-alone-antigravity",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  false,
+        "readme":  null,
+        "note":  "Earlier line with explicit state files and config; potentially interesting for persistence ideas."
+    },
+    {
+        "name":  "she-is-not-alone-archive-claude",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\she-is-not-alone-archive-claude",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  true,
+        "readme":  "README.md",
+        "note":  "Archived branch with docs and spec; useful for conceptual archaeology."
+    },
+    {
+        "name":  "she-is-not-alone-codex",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\she-is-not-alone-codex",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  true,
+        "readme":  "README.md",
+        "note":  "Codex-era branch; likely one of the more important comparison baselines."
+    },
+    {
+        "name":  "she-is-not-alone-g",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\she-is-not-alone-g",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  true,
+        "readme":  "README.md",
+        "note":  "Documentation-heavy branch; likely useful for extracting design decisions."
+    },
+    {
+        "name":  "she-is-not-alone-kiro",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\she-is-not-alone-kiro",
+        "hasPackageJson":  true,
+        "hasSrc":  true,
+        "hasDocs":  false,
+        "readme":  "README.md",
+        "note":  "Another active branch with src; likely worth comparing behaviorally."
+    },
+    {
+        "name":  "virtual-girl",
+        "path":  "C:\\Users\\Ubuntu\\Desktop\\_AYA\\virtual-girl",
+        "hasPackageJson":  true,
+        "hasSrc":  false,
+        "hasDocs":  false,
+        "readme":  "README.md",
+        "note":  "Looks concept-heavy and doc-heavy; may contain valuable framing rather than runtime code."
+    }
+]

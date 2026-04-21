@@ -1,0 +1,1793 @@
+Adaptive Orchestration: Scalable
+Self-Evolving Multi-Agent Systems
+Sathish Sampath, Anuradha Baskaran
+Email: sathishsampath.ai@gmail.com, anuradhabaskaran.ms@gmail.com
+https://www.kaggle.com/code/sathishsampathai/self-evolving-multi-agent-concierge-system
+ABSTRACT
+As Large Language Models (LLMs) are increasingly deployed as
+autonomous agents, they face a critical scalability bottleneck known as
+the "Generalization-Specialization Dilemma." Monolithic agents equipped
+with extensive toolkits suffer from context pollution and attention decay,
+leading to hallucinations. Conversely, static multi-agent swarms introduce
+significant latency and resource overhead. This paper introduces a
+Self-Evolving Concierge System, a novel architecture utilizing a
+Dynamic Mixture of Experts (DMoE) approach. Unlike recent
+self-improving agents that rewrite their own codebase, our system
+preserves stability by dynamically restructuring its runtime environment:
+"hiring" specialized sub-agents based on real-time conversation analysis.
+We introduce an asynchronous "Meta-Cognition Engine" that detects
+capability gaps, a Least Recently Used (LRU) eviction policy for resource
+constraints, and a novel "Surgical History Pruning" mechanism to mitigate
+refusal bias. Experimental results demonstrate that this architecture
+maintains high task success rates while minimizing token consumption
+compared to static agent swarms.
+I. INTRODUCTION AND BACKGROUND
+The paradigm of "Agentic AI" is undergoing a fundamental shift from static, pre-configured
+models to Self-Evolving Systems. Recent comprehensive surveys [1], [2] identify this
+transition as critical for bridging the gap between foundation models and lifelong agentic
+systems. While early agents were limited to simple question-answering, modern architectures
+must execute complex tasks involving external tools and dynamic environments.
+Preprint
+However, scaling these agents presents a "Generalization-Specialization Dilemma." A primary
+constraint is Context Pollution [3]. Transformer-based architectures have a finite attention
+span; as the number of available tools descriptions in the system prompt increases, the
+model's ability to select the correct tool degrades. A monolithic agent with access to 100
+tools will frequently confuse parameters or hallucinate capabilities.
+Current solutions typically fall into two categories: Static Swarms (e.g., Microsoft AutoGen),
+which are computationally expensive due to maintaining multiple active context windows, or
+Code-Level Self-Evolution [4], where agents autonomously rewrite their own scaffold. While
+the latter offers high adaptability, it introduces significant stability risks and regression
+challenges.
+To address these inefficiencies, we propose a Just-in-Time (JIT) Assembly architecture that
+adapts the Mixture of Experts (MoE) paradigm [5] to agent orchestration. Rather than
+routing tokens to neural sub-networks, our system routes semantic tasks to specialized
+agents. Our system decouples tool storage (Cold Storage) from execution (Active Runtime),
+employing a background "Listener-Learner" process to monitor user intent and dynamically
+"hydrate" specific experts only when necessary.
+Our approach is further grounded in two key theoretical frameworks. First, we apply principles
+from Experience-driven Lifelong Learning (ELL) [6] and Generative Agent Memory [7] to
+manage the "internalization" of capabilities. Specifically, we address "Refusal Bias"—where an
+agent continues to deny a request it previously failed at—by implementing a surgical history
+pruning mechanism that effectively allows the agent to "forget" its prior limitations once a
+new skill is acquired. Second, we adopt a Release Engineering perspective [8], treating
+capability gaps not as runtime failures, but as logged defects to be resolved, preventing
+"Hollow Evolution" where agents are created without valid tools.
+II. SYSTEM ARCHITECTURE
+The architecture is composed of four decoupled modules operating in a continuous feedback
+loop. The system design follows the principle of ephemeral specialization, where high-cost
+agents are treated as temporary resources.
+Preprint
+Fig. 1. The Dynamic Mixture of Experts (DMoE) Architecture. The Generic Concierge routes
+tasks while the Listener-Learner asynchronously updates the Expert Registry based on user
+needs.
+A. The Generic Concierge (The Router)
+The entry point is a lightweight agent designed with the Principle of Least Privilege. It
+possesses a Dynamic Manifest 𝑀 , which is a dictionary of currently active expert
+For every user query 𝑄, the Concierge determines if . If a match is found, the
+query is routed. If not, the Concierge attempts to handle it with generic tools (Search,
+Python).
+The routing mechanism is not static; it relies on the Dynamic Manifest injected into the
+Concierge's system prompt. This manifest contains natural language descriptions of the
+currently "hydrated" experts.
+As experts are added or evicted, this system prompt is updated in real-time, allowing the
+Concierge to become aware of new capabilities immediately without a restart.
+Preprint
+B. The Expert Registry (Dynamic Resource Management)
+The Registry acts as the kernel of the DMoE system, managing the lifecycle of specialized
+agents. To prevent memory bloat, it enforces a hard limit 𝐾 on the number of active experts
+(e.g., 𝐾 = 5). The registry maintains a hash map of active agent instances and their metadata.
+We implement a Least Recently Used (LRU) eviction policy to manage the limited slots. Let
+be the timestamp of the last interaction with expert . When a new expert is
+required and :
+The system removes from memory and initializes . This ensures the runtime context
+remains relevant to the user's immediate focus. For example, if a user shifts from "Coding" to
+"Travel Planning," the coding expert(now idle) is swapped out for the travel expert, freeing up
+tokens and computational resources.
+C. The Listener-Learner (Meta-Cognition Engine)
+This is an asynchronous background process that serves as the system's "pulse." Unlike the
+Concierge, which operates synchronously to answer users, the Listener-Learner mines
+interaction logs 𝐿 in batches to detect subtle signals of friction or inefficiency. It detects two
+primary signals:
+1. Gap Signal ( ): Triggered when the Concierge responds with a specific refusal
+phrase (e.g., "I lack the capability," "I cannot do that"). This signal implies a missing
+tool that exists in Cold Storage but is not currently loaded.
+2. Optimization Signal ( ): Triggered when generic tools are over-utilized for a
+specific domain. For instance, if the system performs 5+ generic Google searches
+about "Stock Prices," the Learner infers that a dedicated "Finance Expert" (with direct
+API access) would be more efficient than scraping web pages.
+Upon detecting , the Learner performs a semantic similarity search against the Model
+Context Protocol (MCP) Registry (Cold Storage) to identify the optimal toolset. If a
+matching toolset is found with high confidence, it triggers the creation of a new expert.
+D. The MCP Registry (Cold Storage)
+The MCP Registry is a static repository of dormant tools defined using the Model Context
+Protocol. Each entry contains the tool's schema, API credentials, and a system prompt
+template. These tools are not loaded into the agent's context window until explicitly requested
+by the Listener-Learner. This separation of "Storage" and "Runtime" allows the system to
+theoretically support an infinite number of tools, limited only by the size of the cold storage
+Preprint
+database, while keeping the active context window small and efficient.
+III. IMPLEMENTATION DETAILS
+A. The "Inception" Concurrency Pattern
+A significant engineering challenge in Python-based agent environments (specifically Jupyter
+or single-threaded serverless functions) is the blocking nature of the asyncio event loop.
+Nested agents—where the Concierge (Agent A) calls an Expert (Agent B) which might call a
+tool (Function C)—typically result in deadlocks or event loop conflicts.
+We implemented the "Inception" pattern using concurrent.futures.ThreadPoolExecutor. When
+the Concierge decides to route a task, it pauses its own execution context and spawns the
+Expert Agent in a separate, isolated thread.
+This isolates the sub-agent's event loop from the parent router, enabling true hierarchical
+reasoning without freezing the main application thread. This allows for "synchronous-style"
+reasoning within an asynchronous framework.
+B. Surgical History Pruning
+To solve "Refusal Bias," we implemented a direct database manipulation layer. Refusal bias
+occurs when an LLM, having previously stated "I cannot book flights," continues to refuse the
+request even after the capability has been added, because the refusal is present in its
+conversation history (few-shot conditioning).
+When the Listener-Learner upgrades the system from state (Generic) to (Specialized),
+it identifies the specific Message ID ( ) where the refusal occurred. The system
+executes a SQL deletion:
+𝐷𝐸𝐿𝐸𝑇𝐸 𝐹𝑅𝑂𝑀 𝑒𝑣𝑒𝑛𝑡𝑠 𝑊𝐻𝐸𝑅𝐸 𝑖𝑑 =
+This removes the "memory" of the refusal from the chat history. When the LLM re-reads the
+context for the next turn, it sees the user's original request followed immediately by the new
+Expert's successful execution. This creates a seamless narrative continuity where the agent
+appears to have always had the capability.
+C. Fault Tolerance: Gap Reporting
+To prevent "Hollow Evolution"—the creation of a specialized expert that lacks the actual tools
+to perform its job—the system performs a strict validation against the MCP Registry before
+evolution.
+Preprint
+If the required tool is not found in Cold Storage, the system generates a structured Gap
+Report. This is a log entry specifically tagged for developer review (e.g., [MISSING_FEATURE]:
+FlightBooking). This transforms user frustration into actionable engineering tickets, rather
+than allowing the agent to hallucinate a solution or enter a loop of apologies.
+IV. EXPERIMENTAL EVALUATION
+We validated the system's performance by running a predefined simulation [9] that mimics
+three distinct user interaction scenarios. The experiments measure the system's ability to
+transition from a generic state to a specialized state.
+Scenario 1: Optimization (The "Cricket" Test)
+Objective: Demonstrate the system's ability to detect inefficient tool usage and replace it
+with specialized APIs.
+1. Phase 1: Generic Mode (Initial State)
+○ User Input: "What is the score of the India vs Australia match?"
+○ System Action: The Generic Concierge, lacking specific sports tools, defaults
+to perform_google_search.
+○ Response: Returns a textual summary scraped from search results (Latency:
+~3.5s, Tokens: ~800).
+○ Listener Log: The Listener-Learner detects repeated usage of Google Search
+for queries classified under Topic: Sports.
+2. Evolution Cycle:
+○ The Listener identifies a high frequency of "Sports" queries ($Count > 3$).
+○ It scans the MCP Registry and finds Cricket_MCP (a dormant toolset).
+○ Action: It "hydrates" a new CricketExpert agent and adds it to the Dynamic
+Manifest.
+3. Phase 2: Specialized Mode (Final State)
+○ User Input: "Who is the top scorer?"
+○ System Action: The Concierge consults the updated manifest, sees
+CricketExpert, and routes the query.
+○ Response: The Expert uses the get_match_score API directly.
+○ Result: Latency decreased by 40% (~2.1s vs ~3.5s) and token usage decreased
+by 60% (~320 vs ~800 tokens), as the agent switched from parsing raw HTML
+to consuming structured JSON.
+Preprint
+Scenario 2: Installation (The "Email" Test)
+Objective: Demonstrate "Just-in-Time" capability acquisition and history repair.
+1. Phase 1: Refusal (Initial State)
+○ User Input: "Send an email to the team regarding the meeting."
+○ System Action: The Concierge checks its current manifest, finds no email
+capability, and refuses.
+○ Response: "I currently lack the capability to send emails."
+○ Listener Log: Detects the refusal phrase ("lack the capability") + Intent: Send
+Email.
+2. Evolution & Pruning:
+○ The Listener searches Cold Storage for Email_MCP. A match is found.
+○ Action 1: Initializes EmailExpert and updates the manifest.
+○ Action 2 (Critical): Executes Surgical History Pruning. The database record
+of the Concierge's refusal ("I currently lack...") is deleted.
+3. Phase 2: Seamless Execution
+○ The system prompts the user to continue (or processes the next turn).
+○ User Input: "Did you send it?"
+○ System Context: Because the refusal was deleted, the LLM context looks like:
+User: "Send email..." -> System: [New Email Expert Activated].
+○ Response: "I am ready. Please provide the recipient address."
+○ Result: The agent successfully acquired the skill without the user needing to
+restart the session or manually install plugins.
+Scenario 3: Dead End (The "Flight" Test)
+Objective: Validate fault tolerance against "Hollow Evolution" (hallucinating tools).
+1. Phase 1: Request
+○ User Input: "Book a flight to London for next Tuesday."
+○ System Action: Concierge refuses: "I lack the capability to book flights."
+2. Evolution Check:
+○ Listener analyzes intent: Book Flight.
+○ Registry Scan: Searches for Flight_MCP in Cold Storage.
+○ Result: None (Tool does not exist in the repository).
+3. Outcome:
+○ Action: The system does not create a new agent.
+○ Reporting: It generates a GAP_REPORT log entry: [MISSING_FEATURE]:
+FlightBooking requested by UserID_001.
+○ User Feedback: "I have logged a request for flight booking capabilities with
+our engineering team."
+Preprint
+○ Result: Prevents the creation of a "dummy" agent that would simply apologize
+in a loop, thereby maintaining system trust.
+V. ASSUMPTIONS AND LIMITATIONS
+A. Assumptions
+The research assumes a stateless tool architecture where MCP tools can be hot-swapped
+without complex configuration (e.g., OAuth tokens are pre-provisioned). It also assumes a
+single-node runtime; the current thread-pool implementation is designed for a single
+machine and would require refactoring for distributed clusters.
+B. Limitations
+1. Evolution Latency: There is an inherent delay between the user's failed request and
+the system's evolution, determined by the Listener-Learner's polling interval.
+2. Cold Start Overhead: Instantiating a new expert agent introduces a slight latency
+penalty compared to calling a pre-loaded tool.
+3. State Complexity: Debugging an autonomously changing runtime is difficult, as
+reproducing bugs requires precise snapshots of the ephemeral registry state.
+VI. FUTURE WORK
+Future iterations of this research will focus on the following areas to address current
+limitations and expand system capabilities:
+1. Distributed Containerization: We aim to decouple experts from thread-based
+execution, moving them into isolated Docker containers or Kubernetes pods. This will
+enhance security by sandboxing code execution and allow for independent scaling of
+heavily used experts.
+2. Agent Snapshotting: Currently, evicted experts lose their conversational context. We
+propose implementing a serialization mechanism to save the state of evicted agents to
+disk, allowing them to be "rehydrated" with their learned context intact.
+3. Dynamic Elasticity: We plan to implement auto-scaling logic that dynamically adjusts
+the number of active expert slots (K) based on available system memory and real-time
+load, rather than relying on a fixed hard limit.
+Preprint
+VII. CONCLUSION
+This work presents the Self-Evolving Concierge System, a robust architectural solution to the
+"Generalization-Specialization Dilemma" in autonomous AI agents. By synthesizing the
+flexibility of monolithic models with the precision of specialized swarms, the proposed
+Dynamic Mixture of Experts (DMoE) framework successfully mitigates context pollution
+without incurring the prohibitive computational costs of static multi-agent systems. The novel
+contributions of this research include the asynchronous "Listener-Learner" engine; the
+resource-efficient LRU eviction policy; and the "Surgical History Pruning" technique. These
+components collectively enable a runtime environment that is both adaptive and coherent. We
+have demonstrated that treating agent capabilities as ephemeral, managed resources rather
+than static assets allows for significantly higher scalability. As LLMs continue to integrate with
+an expanding universe of external tools, such "Just-in-Time" orchestration architectures will
+be foundational to building General Purpose AI that is both powerful and efficient.
+REFERENCES
+[1] J. Fang et al., "A Comprehensive Survey of Self-Evolving AI Agents: A New Paradigm Bridging
+Foundation Models and Lifelong Agentic Systems," arXiv preprint arXiv:2508.07407, 2025.
+[2] H. Gao et al., "A Survey of Self-Evolving Agents: On Path to Artificial Super Intelligence," arXiv
+preprint arXiv:2507.21046, 2025.
+[3] N. F. Liu et al., "Lost in the Middle: How Language Models Use Long Contexts," Transactions of the
+Association for Computational Linguistics, vol. 12, pp. 1-15, 2024.
+[4] C. S. Xia et al., "Live-SWE-agent: Can Software Engineering Agents Self-Evolve on the Fly?," arXiv
+preprint arXiv:2511.13646, 2025.
+[5] N. Shazeer et al., "Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts
+Layer," ICLR, 2017.
+[6] Y. Cai et al., "Building Self-Evolving Agents via Experience-Driven Lifelong Learning: A Framework
+and Benchmark," arXiv preprint arXiv:2508.19005, 2025.
+[7] J. S. Park et al., "Generative Agents: Interactive Simulacra of Human Behavior," UIST '23: Proceedings
+of the 36th Annual ACM Symposium on User Interface Software and Technology, 2023.
+[8] D. Zhang, "AgentDevel: Reframing Self-Evolving LLM Agents as Release Engineering," arXiv preprint
+arXiv:2601.04620, 2026.
+[9] Self Evolving Multi Agent Concierge System ,
+https://www.kaggle.com/code/sathishsampathai/self-evolving-multi-agent-concierge-system
+
+Below is a concise, technical synthesis and critique of the paper you shared, framed for someone already building agentic systems and orchestration layers.
+
+🔧 Core Contribution (One-paragraph TL;DR)
+
+The paper proposes a runtime-adaptive agent orchestration architecture—a Dynamic Mixture of Experts (DMoE)—that avoids both context pollution (monolithic agents with huge toolsets) and latency/resource blowup (static agent swarms). Instead of self-modifying code, the system self-evolves at runtime by hydrating, evicting, and rewiring specialized sub-agents just-in-time, guided by an asynchronous Listener-Learner (meta-cognition engine). The most novel idea is Surgical History Pruning, which deletes prior refusal messages to eliminate refusal bias once new capabilities are installed.
+
+🧠 Key Ideas, Distilled
+1. Generalization–Specialization Dilemma (Well Framed)
+
+You correctly formalize a real bottleneck:
+
+Approach	Failure Mode
+Monolithic agent	Context pollution, hallucinated tools
+Static multi-agent swarm	High latency, token & infra cost
+Code-rewriting agents	Instability, regressions
+
+Your proposal targets runtime structure, not model weights or code.
+
+2. Dynamic Mixture of Experts (DMoE) ≠ Neural MoE
+
+Important distinction you make (and many papers blur):
+
+Neural MoE	Your DMoE
+Routes tokens	Routes semantic tasks
+Experts are weights	Experts are agents + tools
+Static graph	Ephemeral runtime graph
+
+This framing is strong and defensible.
+
+3. Listener-Learner = Real Meta-Cognition (Not Prompt Hacking)
+
+The Listener-Learner is the intellectual backbone:
+
+Signals detected
+
+Gap signal → explicit refusal phrases
+
+Optimization signal → inefficient generic tool overuse
+
+Key insight:
+Evolution is triggered by behavioral telemetry, not user instructions.
+
+This aligns closely with release engineering, not “autonomous AGI fantasy.”
+
+4. Cold Storage vs Active Runtime (Very Solid Design)
+
+The MCP Registry as Cold Storage is one of the cleanest architectural choices:
+
+Infinite tool universe
+
+Finite active context
+
+Zero hallucinated capabilities (via validation)
+
+This mirrors:
+
+OS virtual memory
+
+Plugin systems
+
+Container image registries
+
+💡 This is a systems paper disguised as an AI paper—that’s a strength.
+
+5. Surgical History Pruning (Most Novel, Most Controversial)
+
+This is the sharpest idea in the paper.
+
+Problem:
+LLMs anchor on past refusals → persistent refusal bias
+
+Solution:
+Delete the exact refusal message from the conversation log when capability is added.
+
+DELETE FROM events WHERE id = <refusal_message_id>;
+
+Effect:
+The model “remembers” it always had the capability.
+
+✅ Elegant
+⚠️ Dangerous if misused (auditability, compliance, trust)
+
+But for tool-capability evolution, it is extremely effective.
+
+🧪 Experimental Evaluation (Honest Take)
+
+What works
+
+Scenarios are realistic
+
+Metrics (latency, tokens) are appropriate
+
+Optimization case (Cricket API) is convincing
+
+What’s missing
+
+No statistical variance
+
+No adversarial tests
+
+No comparison against:
+
+Long-context monolith
+
+Planner-router-tool baselines
+
+RAG-tool hybrids
+
+This is acceptable for a systems-architecture paper, but limits claims.
+
+⚠️ Limitations You Identified (Correctly)
+
+The paper is refreshingly honest:
+
+Evolution latency (polling-based)
+
+Cold-start overhead
+
+Debugging difficulty in ephemeral runtimes
+
+One additional limitation worth stating explicitly:
+
+History mutation breaks strict replayability and forensic traceability.
+
+That matters in regulated environments.
+
+🧩 How This Fits the Broader Landscape
+
+This work sits between three camps:
+
+❌ Not AutoGPT-style agent spam
+
+❌ Not self-rewriting code agents
+
+✅ Runtime-adaptive orchestration layer
+
+Closest conceptual neighbors:
+
+Release engineering
+
+OS process schedulers
+
+Dynamic plugin systems
+
+Kubernetes control planes
+
+This is agent orchestration as infrastructure, not “thinking agents.”
+
+🧠 What You Could Push Further (Research-wise)
+
+High-leverage extensions:
+
+Formalize eviction as utility optimization
+
+Replace pure LRU with value × cost × recency
+
+Partial history pruning
+
+Mask refusals instead of deleting (audit-safe)
+
+Predictive hydration
+
+Pre-load experts via intent trajectory modeling
+
+Distributed Listener-Learner
+
+Treat it as a control plane service
+
+Failure replay
+
+Store “capability-missing traces” as tests
+
+🏁 Final Verdict
+
+This is a strong, pragmatic architecture paper.
+Its biggest strength is refusing to chase AGI mysticism and instead treating agents as:
+
+ephemeral, managed computational resources
+
+The DMoE framing + Listener-Learner + Surgical History Pruning is a coherent system, not a bag of tricks.
+
+If you’re already thinking in terms of:
+
+agent runtimes
+
+tool registries
+
+orchestration layers
+
+self-healing systems
+
+…this paper will resonate deeply.
+
+If you want, I can:
+
+map this architecture onto your own agent stack
+
+formalize it as a reference implementation
+
+or stress-test it against adversarial / pathological cases
+
+agent runtimes
+
+Below is a clear, systems-level breakdown of agent runtimes—what they are, how they’re structured, and where modern self-evolving architectures (like DMoE) fit.
+
+1. What an Agent Runtime Is (Precise Definition)
+
+An agent runtime is the execution environment that hosts, schedules, constrains, and mutates AI agents while they are running.
+
+It is not:
+
+the LLM
+
+the prompt
+
+the agent “personality”
+
+It is:
+
+lifecycle control
+
+memory boundaries
+
+tool availability
+
+concurrency model
+
+failure handling
+
+evolution logic
+
+Think OS kernel, not application code.
+
+2. Core Responsibilities of an Agent Runtime
+A. Execution & Scheduling
+
+Runs agent reasoning loops
+
+Handles sync ↔ async transitions
+
+Prevents deadlocks / re-entrancy issues
+
+Enforces timeouts
+
+Examples:
+
+Thread pools
+
+Async task queues
+
+Process / container boundaries
+
+B. Context & Memory Management
+
+Decides what the agent sees
+
+Injects / removes tools dynamically
+
+Applies pruning, summarization, masking
+
+This is where context pollution is either solved or amplified.
+
+C. Tool & Capability Management
+
+Tool registry (cold vs hot)
+
+Validation before execution
+
+Capability discovery
+
+Permission scoping (least privilege)
+
+A good runtime never lets the agent hallucinate tools.
+
+D. Orchestration & Routing
+
+Routes tasks between agents
+
+Supports hierarchies (agent → sub-agent)
+
+Enables delegation, not duplication
+
+This is where multi-agent ≠ swarm chaos.
+
+E. Observability & Control
+
+Logs decisions, failures, refusals
+
+Emits telemetry (latency, token cost)
+
+Allows replay, debugging, inspection
+
+Without this, “self-evolving” becomes self-corrupting.
+
+3. Runtime Architectures (Comparison)
+Runtime Style	Characteristics	Failure Mode
+Monolithic	One agent, many tools	Context pollution
+Static Swarm	Many agents always on	Token + latency explosion
+Planner–Executor	Central planner routes	Planner overload
+Self-Modifying	Agent rewrites itself	Instability
+DMoE Runtime	Ephemeral specialists	State complexity
+
+Your shared paper sits squarely in the DMoE Runtime category.
+
+4. DMoE as a Runtime Pattern (Why It Matters)
+
+Key runtime ideas in DMoE:
+
+🔹 Cold vs Hot Capabilities
+
+Cold: infinite registry
+
+Hot: bounded active set (K)
+
+This mirrors:
+
+Virtual memory
+
+CPU caches
+
+Kubernetes pod scheduling
+
+🔹 Runtime Mutation (Not Code Mutation)
+
+Instead of:
+
+rewriting agent code
+
+re-prompting endlessly
+
+The runtime:
+
+hydrates
+
+evicts
+
+rewires
+
+Agents are processes, not identities.
+
+🔹 Meta-Cognition Outside the Agent
+
+Critical insight:
+
+Self-reflection should live in the runtime, not in the agent’s prompt.
+
+The Listener-Learner is effectively:
+
+a control plane
+
+a profiler
+
+a release manager
+
+5. Surgical History Pruning = Runtime-Level Memory Control
+
+This is not prompting.
+This is runtime state surgery.
+
+The runtime decides:
+
+what the agent is allowed to remember
+
+what must be forgotten for correctness
+
+This is analogous to:
+
+cache invalidation
+
+rollback logs
+
+migration scripts
+
+6. Minimal Agent Runtime Stack (Practical)
+
+If you were to implement a serious agent runtime today:
+
+Control Plane
+
+Agent registry
+
+Tool registry (MCP / schema-validated)
+
+Telemetry store
+
+Policy engine
+
+Data Plane
+
+Active agent processes
+
+Execution sandbox
+
+Memory window manager
+
+Evolution Plane
+
+Log miner
+
+Capability gap detector
+
+Optimizer
+
+History mutator
+
+7. Mental Model (Very Important)
+
+Do not think:
+
+“I’m building a smart agent”
+
+Think instead:
+
+“I’m building an operating system for reasoning processes”
+
+LLMs are user-space programs.
+Agent runtimes are kernels.
+
+8. Where This Is Going (Short-Term Future)
+
+Agent runtimes will converge toward:
+
+containerized experts
+
+declarative capability specs
+
+schedulers with cost models
+
+replayable evolution logs
+
+In other words:
+
+Kubernetes for cognition
+
+If you want, next we can:
+
+map this to your existing agent stack
+
+design a minimal agent runtime spec
+
+compare thread-based vs container-based runtimes
+
+or formalize agent lifecycle states (spawn → hydrate → execute → evict → snapshot)
+
+Just say which direction.
+
+compare thread-based vs container-based runtimes
+
+Below is a clean, engineering-level comparison of thread-based vs container-based agent runtimes, focused on agent orchestration, safety, scalability, and evolution rather than generic DevOps tradeoffs.
+
+1. High-Level Definition
+🧵 Thread-Based Agent Runtime
+
+Agents execute as threads or async tasks within a single process / VM.
+
+Examples:
+
+Python ThreadPoolExecutor
+
+asyncio task graphs
+
+Node.js worker threads
+
+Used in:
+
+Prototypes
+
+Jupyter
+
+Single-node agent systems
+
+📦 Container-Based Agent Runtime
+
+Agents execute as isolated processes inside containers or micro-VMs, orchestrated externally.
+
+Examples:
+
+Docker containers
+
+Kubernetes pods
+
+Firecracker microVMs
+
+Used in:
+
+Production agent platforms
+
+Multi-tenant systems
+
+Regulated environments
+
+2. Side-by-Side Comparison
+Dimension	🧵 Thread-Based	📦 Container-Based
+Isolation	❌ Shared memory	✅ Strong OS / kernel isolation
+Startup latency	Very low (ms)	Medium (100ms–seconds)
+Resource control	Weak	Strong (CPU, RAM, GPU quotas)
+Fault containment	Poor	Excellent
+Security	Low	High
+Debugging	Easy	Harder
+State sharing	Trivial	Explicit
+Scaling	Vertical only	Horizontal + elastic
+Multi-tenancy	Unsafe	Designed for it
+Reproducibility	Weak	Strong
+Compliance	❌	✅
+3. Thread-Based Runtime: Strengths & Failure Modes
+✅ Strengths
+
+Near-zero overhead
+
+Simple mental model
+
+Ideal for:
+
+JIT expert hydration
+
+Fast iteration
+
+Research & experimentation
+
+❌ Failure Modes
+
+Event Loop Deadlocks
+
+Nested agents + tools = hell (hence “Inception pattern”)
+
+Memory Contamination
+
+One bad agent corrupts others
+
+Security Collapse
+
+Tools run with same privileges
+
+Hard to Kill
+
+Infinite loops block everything
+
+🧠 When Thread-Based Is Correct
+
+Single-user systems
+
+Local development
+
+Rapid prototyping
+
+Non-adversarial environments
+
+4. Container-Based Runtime: Strengths & Costs
+✅ Strengths
+
+True isolation
+
+Fault-tolerant
+
+Clean lifecycle (spawn → kill → restart)
+
+Safe tool execution
+
+Natural fit for:
+
+Ephemeral experts
+
+Auto-scaling
+
+Multi-tenant agents
+
+❌ Costs
+
+Cold Start Latency
+
+Container spin-up dominates short tasks
+
+Operational Complexity
+
+Orchestration, networking, logging
+
+State Serialization
+
+Context must be externalized
+
+🧠 When Container-Based Is Correct
+
+Production systems
+
+User-facing platforms
+
+Untrusted tool execution
+
+Long-running or expensive experts
+
+5. Impact on Self-Evolving Architectures (DMoE)
+Thread-Based DMoE
+
+Fast hydration/eviction
+
+Cheap evolution
+
+But:
+
+No hard safety boundaries
+
+Poor replayability
+
+Hard to audit
+
+Container-Based DMoE
+
+Experts = disposable workloads
+
+LRU eviction = pod termination
+
+History pruning = context rewrite
+
+Listener-Learner = control plane
+
+This maps perfectly to your paper’s future work.
+
+6. Hybrid Runtime (The Only Serious Endgame)
+
+Most real systems converge here:
+
+🔁 Two-Tier Runtime
+Layer	Technology	Purpose
+Fast Path	Threads / async	Cheap experts, routing
+Slow Path	Containers / microVMs	Risky, heavy, external tools
+Example Flow
+
+Concierge routes intent
+
+Lightweight expert runs in-process
+
+Heavy tool → offloaded to container
+
+Results returned + container killed
+
+This gives:
+
+low latency
+
+strong isolation
+
+bounded cost
+
+7. Mapping Runtime Choice to Agent Types
+Agent Type	Recommended Runtime
+Router / Concierge	Thread
+Planner	Thread
+Search / RAG	Thread
+Code execution	Container
+Email / Payments	Container
+Web automation	Container
+User-supplied code	Container
+GPU inference	Container
+8. Debuggability & Evolution
+Thread-Based
+
+Easy step-through debugging
+
+Hard to reproduce production bugs
+
+Container-Based
+
+Harder to debug live
+
+Easy replay via image + inputs
+
+Evolution requires reproducibility → containers win long-term.
+
+9. Strategic Recommendation
+Short Term
+
+Thread-based runtime
+
+Clear interfaces
+
+Externalized state
+
+Strict tool validation
+
+Medium Term
+
+Hybrid model
+
+Containerize dangerous experts first
+
+Long Term
+
+Full control plane:
+
+autoscaling
+
+snapshots
+
+policy-driven scheduling
+
+10. One-Line Summary
+
+Threads are for thinking fast. Containers are for thinking safely.
+Serious agent runtimes need both.
+
+If you want next, I can:
+
+design a hybrid runtime architecture diagram
+
+formalize agent lifecycle states
+
+show Kubernetes mapping for DMoE
+
+or help you decide what to containerize first
+
+Just say the word.
+
+Self-Evolving Architectures
+
+Below is a systems-level explanation of Self-Evolving Architectures, focused on what actually evolves, where evolution is allowed, and how to keep systems stable while adaptive.
+
+1. What “Self-Evolving” Actually Means (Operational Definition)
+
+A Self-Evolving Architecture is a system that can change its own operational structure at runtime based on observed performance, failures, or demand—without retraining the base model and without human intervention per event.
+
+Crucially:
+
+❌ Not “the model improves itself”
+✅ “The runtime reorganizes how intelligence is deployed”
+
+2. What Can Evolve (and What Must Not)
+✅ Safe to Evolve
+
+Agent topology (who talks to whom)
+
+Capability availability (tools, experts)
+
+Resource allocation (slots, memory, CPU)
+
+Routing logic
+
+Memory visibility (pruning, masking)
+
+Execution environment (thread → container)
+
+❌ Dangerous to Evolve
+
+Core reasoning model weights
+
+Tool semantics at runtime
+
+Security policies
+
+Identity / permissions model
+
+Evolution logic itself (without guardrails)
+
+Key principle:
+
+Evolve structure, not semantics.
+
+3. Four Classes of Self-Evolving Architectures
+I. Prompt-Evolving (Weak, Fragile)
+
+Modifies system prompts
+
+Accumulates instructions
+
+High entropy over time
+
+Failure mode: prompt bloat, contradiction.
+
+II. Code-Evolving (Powerful, Risky)
+
+Agent rewrites its own code
+
+Can fix bugs autonomously
+
+Failure mode: regressions, non-reproducibility.
+
+III. Memory-Evolving (Subtle, Effective)
+
+Summarization
+
+Pruning
+
+Forgetting failures
+
+Reweighting experiences
+
+Failure mode: loss of audit trail if unmanaged.
+
+IV. Runtime-Evolving (Strongest, Safest) ✅
+
+Changes how agents are instantiated, connected, and constrained
+
+Does not touch core logic or weights
+
+This is the class your paper belongs to.
+
+4. Runtime-Evolving Architecture (Canonical Pattern)
+Core Components
+1. Stable Core
+
+Base LLM
+
+Fixed reasoning loop
+
+Immutable safety rules
+
+2. Evolution Layer (Control Plane)
+
+Listener / Monitor
+
+Capability gap detector
+
+Optimizer
+
+Policy engine
+
+3. Ephemeral Execution Layer
+
+Agents as processes
+
+Experts as temporary resources
+
+Tools as hot-swappable capabilities
+
+Evolution happens outside the agent, not inside its thoughts.
+
+5. Signals That Drive Evolution (Critical)
+
+Self-evolution must be signal-driven, not curiosity-driven.
+
+Common Signals
+
+Explicit refusal phrases
+
+Repeated tool overuse
+
+Latency spikes
+
+Token inefficiency
+
+Failure loops
+
+User correction patterns
+
+Anti-Pattern
+
+“The agent decided to improve itself”
+
+Correct framing:
+
+“The runtime observed inefficiency and reconfigured execution”
+
+6. Evolution Mechanisms (Safe Set)
+Mechanism	Purpose
+Expert hydration	Add capability
+Expert eviction	Control context
+Tool rebinding	Optimize execution
+History pruning	Remove refusal bias
+Slot resizing	Adapt to load
+Execution migration	Thread → container
+
+Each mechanism is:
+
+reversible
+
+observable
+
+bounded
+
+7. Stability Through Constraints
+
+Self-evolving ≠ self-unbounded.
+
+Hard Constraints Required
+
+Max active agents (K)
+
+Tool allow-list
+
+Cold-storage validation
+
+Immutable safety layer
+
+Evolution rate limits
+
+Evolution without constraints becomes entropy.
+
+8. Why Runtime Evolution Beats Self-Modifying Agents
+Criterion	Runtime-Evolving	Self-Modifying
+Stability	High	Low
+Auditability	High	Poor
+Rollback	Easy	Hard
+Safety	Enforceable	Fragile
+Reproducibility	Strong	Weak
+
+Runtime evolution treats intelligence like infrastructure, not identity.
+
+9. Mental Model (Important)
+
+Think in layers:
+
+[ Policy / Safety ]  ← immutable
+[ Evolution Engine ] ← adaptive, constrained
+[ Runtime Topology ] ← mutable
+[ Agents & Tools ]   ← ephemeral
+[ Model Weights ]    ← fixed
+
+Only middle layers are allowed to change.
+
+10. Where This Is Heading
+
+Self-Evolving Architectures are converging toward:
+
+control planes
+
+schedulers
+
+capability registries
+
+observability-driven adaptation
+
+In short:
+
+Agents are becoming workloads.
+Evolution is becoming orchestration.
+
+One-Sentence Summary
+
+A Self-Evolving Architecture is not an agent that changes itself, but a runtime that continuously reorganizes intelligence as a managed resource—under strict constraints.
+
+If you want next, I can:
+
+formalize a reference architecture
+
+design evolution guardrails
+
+map this to Kubernetes / serverless
+
+or compare biological vs engineering evolution models
+
+Just point the direction.
+
+Evolution logic itself
+
+Below is a precise, engineering-level treatment of the evolution logic itself—what it is, where it lives, how it must be constrained, and why it is the most dangerous part of any self-evolving architecture.
+
+1. What “Evolution Logic” Actually Is
+
+Evolution logic is the part of the system that decides:
+
+when the system should change
+
+what should change
+
+how that change is applied
+
+whether the change is valid, safe, and reversible
+
+Formally:
+
+Evolution logic = control-plane decision function over runtime mutations
+
+It is not:
+
+the agent
+
+the LLM
+
+the tools
+
+the experts
+
+It is the meta-layer that governs them.
+
+2. Why Evolution Logic Is Special (and Dangerous)
+
+Everything else in the system can be:
+
+restarted
+
+replaced
+
+sandboxed
+
+killed
+
+Evolution logic cannot, because it controls those mechanisms.
+
+If evolution logic becomes unstable, the entire system loses coherence.
+
+This is why:
+
+self-modifying agents fail
+
+prompt-evolving systems drift
+
+“autonomous improvement” collapses into entropy
+
+3. Hard Rule: Evolution Logic Must Be Non-Evolving (Initially)
+
+Critical principle:
+
+❌ Do NOT allow evolution logic to evolve itself by default
+✅ Treat evolution logic as firmware, not software
+
+You may version it.
+You may replace it.
+You must not let it rewrite itself online.
+
+4. Placement in the Architecture (Where It Lives)
+
+Correct layering:
+
+┌──────────────────────────┐
+│ Safety / Policy (IMMUT.) │
+├──────────────────────────┤
+│ Evolution Logic (FIXED)  │  ← this layer
+├──────────────────────────┤
+│ Runtime Topology (MUT.)  │
+├──────────────────────────┤
+│ Agents / Experts (EPH.)  │
+├──────────────────────────┤
+│ Model Weights (FIXED)    │
+└──────────────────────────┘
+
+Evolution logic:
+
+observes downward
+
+mutates downward
+
+never mutates upward
+
+never mutates itself
+
+5. What Evolution Logic Is Allowed to Do
+✅ Permitted Actions (Finite Set)
+Action	Description
+Hydrate expert	Instantiate capability
+Evict expert	Free context / resources
+Bind tool	Attach validated MCP
+Re-route task	Change agent topology
+Prune history	Remove refusal bias
+Adjust limits	Resize K, timeouts
+Emit gap report	Log missing capability
+
+Each action must be:
+
+typed
+
+validated
+
+reversible
+
+logged
+
+❌ Forbidden Actions
+Action	Why Forbidden
+Modify safety rules	Breaks trust
+Change tool semantics	Hallucination risk
+Rewrite evolution rules	Infinite regress
+Alter identity/permissions	Security breach
+Mutate past outcomes silently	Audit loss
+6. Evolution Logic = Policy + State + Signals
+A. Signals (Inputs)
+
+Evolution logic does not think.
+It reacts to signals.
+
+Examples:
+
+refusal phrases
+
+repeated tool usage
+
+latency spikes
+
+failure loops
+
+user corrections
+
+No signal → no evolution.
+
+B. State (Memory)
+
+Evolution logic tracks:
+
+active experts
+
+recent interactions
+
+last evolution time
+
+failure counters
+
+This state must be:
+
+small
+
+explicit
+
+serializable
+
+C. Policy (Decision Rules)
+
+Policies are deterministic or bounded-probabilistic rules such as:
+
+IF refusal AND tool_exists
+THEN hydrate_expert
+AND prune_refusal
+
+or
+
+IF tool_usage(domain=X) > N
+THEN suggest_specialist
+
+No open-ended reasoning here.
+
+7. Why LLMs Must NOT Control Evolution Logic Directly
+
+Allowing an LLM to decide how it evolves leads to:
+
+goal drift
+
+reward hacking
+
+capability hallucination
+
+self-justifying loops
+
+LLMs are advisors, not governors.
+
+Correct role:
+
+LLMs may recommend evolution
+Evolution logic decides and executes
+
+8. Safe Patterns for Evolution Logic
+Pattern 1: Declarative Evolution Rules
+
+Rules written as data, not code.
+
+- trigger: refusal.capability_missing
+  action:
+    - hydrate_expert
+    - prune_history
+Pattern 2: Two-Phase Evolution
+
+Propose change
+
+Validate against registry & policy
+
+Commit or reject
+
+No single-step mutation.
+
+Pattern 3: Rate Limiting
+
+Evolution cannot happen continuously.
+
+Examples:
+
+max 1 evolution / 10 turns
+
+cooldown after failure
+
+rollback on error
+
+9. Can Evolution Logic Ever Evolve?
+
+Yes—but only under extreme constraints.
+
+Acceptable Methods
+
+Offline retraining of evolution policies
+
+Human-reviewed updates
+
+Canary deployment
+
+Shadow mode evaluation
+
+Never Online Self-Mutation
+
+No:
+
+“the system decided to change how it decides”
+
+That’s recursive instability.
+
+10. Mental Model (Important)
+
+Think of evolution logic as:
+
+BIOS / firmware
+
+Kubernetes controller
+
+Database migration engine
+
+Release manager
+
+Not as:
+
+an agent
+
+a thinker
+
+a personality
+
+One-Sentence Summary
+
+Evolution logic is the constitution of a self-evolving system—everything else may change, but it must remain stable, explicit, and constrained, or the system collapses into entropy.
+
+If you want, next we can:
+
+design a minimal evolution logic spec
+
+formalize allowed mutation primitives
+
+show how to test evolution logic
+
+or explore how (and when) to evolve evolution logic safely
+
+Just say which direction.
+
+how to test evolution logic
+
+Below is a practical, engineering-grade guide to testing evolution logic in self-evolving architectures. This treats evolution as a control-plane system that must be tested like a kernel, not like application code.
+
+0. Core Principle (Read This First)
+
+You do not test “intelligence.”
+You test invariants, transitions, and safety properties.
+
+Evolution logic is correct only if it never violates constraints, even under adversarial inputs.
+
+1. What You Are Testing (Explicit Scope)
+
+You are testing the decision function:
+
+(current_state, signals, policy) → mutation(s)
+
+Not:
+
+LLM reasoning quality
+
+Tool correctness
+
+Expert behavior
+
+2. Required Test Categories (Non-Optional)
+✅ Category A — Invariant Tests (Must Always Hold)
+
+These are hard guarantees.
+
+Examples
+
+Active experts ≤ K
+
+No expert instantiated without registry validation
+
+Safety rules unchanged
+
+Evolution rate limits respected
+
+No mutation without a triggering signal
+
+Example Test
+Given: K = 5
+When: 6th expert is requested
+Then: exactly 1 eviction occurs
+And: active_experts == 5
+
+If any invariant fails → evolution logic is broken.
+
+✅ Category B — Transition Tests (State Machine Testing)
+
+Model evolution logic as a finite state machine.
+
+Example States
+
+Generic
+
+Specialized(X)
+
+Evolving
+
+Cooldown
+
+Faulted
+
+Test
+Generic
+ + refusal(capability=email)
+ → hydrate(EmailExpert)
+ → prune(refusal)
+ → Specialized(Email)
+
+Verify:
+
+correct transition
+
+correct mutation order
+
+no skipped steps
+
+✅ Category C — Signal Sensitivity Tests
+
+Evolution must be signal-driven, not noise-driven.
+
+Tests
+
+Single refusal → evolve
+
+Paraphrased refusal → still detected
+
+Benign phrases → ignored
+
+Repeated tool usage threshold respected
+
+Anti-Test
+User says: "I wonder if you can..."
+→ MUST NOT evolve
+✅ Category D — Negative Evolution Tests (Most Important)
+
+Test when evolution must NOT happen.
+
+Examples
+
+Tool missing in registry
+
+Confidence score below threshold
+
+Cooldown active
+
+Repeated failed evolution
+
+Conflicting signals
+
+Expected result:
+
+No mutation
+
+Gap report emitted (if applicable)
+
+3. Deterministic Replay Testing (Critical)
+
+Evolution logic must be replayable.
+
+Requirement
+
+Given:
+
+interaction log
+
+registry snapshot
+
+evolution config
+
+You must get:
+
+identical mutations
+
+identical ordering
+
+How
+
+Freeze time
+
+Disable randomness
+
+Version policies
+
+If replay diverges → logic is not testable → unsafe.
+
+4. Property-Based Testing (Highly Recommended)
+
+Instead of testing examples, test properties.
+
+Example Properties
+
+Evolution never increases active experts beyond K
+
+Every hydrate has a matching registry entry
+
+Every prune refers to an existing message ID
+
+No mutation occurs without a logged signal
+
+Use:
+
+fuzzed signal streams
+
+random interaction sequences
+
+adversarial phrasing
+
+5. Adversarial Testing (Red Team Evolution)
+
+Simulate attacks against evolution logic.
+
+Attacks to Test
+
+Signal flooding
+
+Refusal phrasing injection
+
+Tool-name spoofing
+
+Evolution oscillation (thrash)
+
+Self-triggering loops
+
+Expected behavior:
+
+rate limiting
+
+rejection
+
+safe degradation
+
+If attackers can force evolution → critical flaw.
+
+6. Mutation Atomicity Tests
+
+Evolution steps must be all-or-nothing.
+
+Test
+hydrate_expert
+→ failure during tool bind
+
+Expected:
+
+no partial expert exists
+
+system rolls back cleanly
+
+state unchanged
+
+No half-evolved systems allowed.
+
+7. Shadow Mode Testing (Pre-Production)
+
+Run evolution logic in shadow mode:
+
+observe signals
+
+propose mutations
+
+DO NOT apply them
+
+Compare:
+
+proposed evolution vs human expectation
+
+cost impact
+
+frequency
+
+Only promote after stability.
+
+8. Metrics to Track During Tests
+
+You must collect:
+
+Metric	Why
+Evolutions per session	Detect overfitting
+Failed evolutions	Registry gaps
+Rollbacks	Policy issues
+Thrash rate	Bad thresholds
+Latency impact	Regression
+Token delta	Efficiency
+
+Evolution without metrics is blind.
+
+9. What Not to Test (Common Mistake)
+
+❌ Do NOT test:
+
+“Is the agent smarter?”
+
+“Did the answer improve?”
+
+“Does it feel adaptive?”
+
+Those are downstream effects, not correctness criteria.
+
+10. Minimal Evolution Logic Test Checklist
+
+Before shipping:
+
+ All invariants tested
+
+ All transitions covered
+
+ Replay deterministic
+
+ Adversarial tests pass
+
+ Shadow mode evaluated
+
+ Metrics stable
+
+ Rollback verified
+
+If any unchecked → do not deploy.
+
+One-Sentence Summary
+
+Evolution logic is tested like a kernel: by proving it never violates invariants, only mutates under valid signals, and remains deterministic, reversible, and auditable under all conditions.
+
+If you want next, I can:
+
+write a formal evolution FSM
+
+design test fixtures
+
+show property-based test examples
+
+or map this to CI/CD pipelines
+
+Just point the direction.
